@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh repo *)",
+      "Bash(gh auth *)",
+      "PowerShell(gh *)",
+      "Bash(git ls-remote *)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(git *)"
+    ]
+  }
+}

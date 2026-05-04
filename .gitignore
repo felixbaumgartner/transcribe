@@ -1,0 +1,19 @@
+node_modules/
+out/
+dist/
+.DS_Store
+
+# Whisper artifacts (downloaded, not committed)
+resources/whisper-bin/whisper*
+resources/whisper-bin/*.exe
+resources/whisper-bin/*.dll
+resources/whisper-bin/ggml*
+resources/models/*.bin
+
+# Local logs / scratch
+*.log
+.env
+.env.local
+
+# Recorded audio scratch (debugging)
+*.wav

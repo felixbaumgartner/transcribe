@@ -17,6 +17,7 @@ export function App(): JSX.Element {
   const [status, setStatus] = useState<WorkerStatus | null>(null)
   const [viewingFile, setViewingFile] = useState<{ name: string; body: string } | null>(null)
   const captureRef = useRef<CaptureHandle | null>(null)
+  const pendingChunksRef = useRef(0)
 
   // Stable elapsed-seconds offset per chunk so segment timestamps line up across chunks
   const chunkOffsetRef = useRef<Record<number, number>>({})
@@ -32,6 +33,7 @@ export function App(): JSX.Element {
   }, [refreshHistory])
 
   const handleChunk = useCallback(async (chunk: ChunkMessage) => {
+    pendingChunksRef.current += 1
     setPendingChunks((n) => n + 1)
     // Record the absolute time offset for this chunk (in elapsed seconds since recording started)
     chunkOffsetRef.current[chunk.id] = chunk.id * chunkSecondsRef.current
@@ -44,6 +46,7 @@ export function App(): JSX.Element {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
     } finally {
+      pendingChunksRef.current -= 1
       setPendingChunks((n) => n - 1)
     }
   }, [])
@@ -80,18 +83,26 @@ export function App(): JSX.Element {
     await handle.stop()
     captureRef.current = null
     setRecording(false)
-    // Wait a tick for any in-flight chunks before saving
-    setTimeout(async () => {
-      const final = segmentsRef.current
-      if (final.length > 0) {
-        try {
-          await window.api.saveTranscript(handle.startedAt.toISOString(), final)
-          await refreshHistory()
-        } catch (err) {
-          console.error('Failed to save transcript', err)
-        }
-      }
-    }, 200)
+
+    // Drain any in-flight chunks before saving, so the tail flushed at stop-time
+    // makes it into the saved file. Uses a ref so we don't depend on stale React state.
+    const t0 = Date.now()
+    while (pendingChunksRef.current > 0 && Date.now() - t0 < 60000) {
+      await new Promise((r) => setTimeout(r, 100))
+    }
+
+    const final = segmentsRef.current
+    if (final.length === 0) {
+      setError('Recording stopped, but no transcribed segments were produced. Nothing to save.')
+      return
+    }
+    try {
+      await window.api.saveTranscript(handle.startedAt.toISOString(), final)
+      await refreshHistory()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(`Failed to save transcript: ${msg}`)
+    }
   }, [refreshHistory])
 
   // Track latest segments in a ref so the save callback sees the up-to-date list

@@ -66,14 +66,50 @@ export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<
     channelCountMode: 'explicit',
     channelInterpretation: 'speakers'
   })
-  node.port.onmessage = (e) => onChunk(e.data as ChunkMessage)
+  // Single dispatcher for everything coming from the worklet. Typed messages
+  // (e.g. 'flushed') are control signals; un-typed messages are real audio chunks.
+  let onFlushed: (() => void) | null = null
+  node.port.onmessage = (e) => {
+    const msg = e.data
+    if (msg?.type === 'flushed') {
+      onFlushed?.()
+      return
+    }
+    if (msg?.type) return
+    onChunk(msg as ChunkMessage)
+  }
   merger.connect(node)
+
+  // Pump the graph to a muted destination so the AudioContext actually runs even though
+  // our sink AudioWorkletNode has no outputs of its own.
+  const silentSink = ctx.createGain()
+  silentSink.gain.value = 0
+  merger.connect(silentSink)
+  silentSink.connect(ctx.destination)
+
+  // AudioContext can start suspended on Windows when created after an awaited gesture.
+  if (ctx.state === 'suspended') await ctx.resume()
 
   const startedAt = new Date()
 
   return {
     startedAt,
     async stop() {
+      // Ask the worklet to flush whatever's left in its buffer (the last <30s of audio)
+      // before tearing down, otherwise the tail of the recording is silently discarded.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          onFlushed = null
+          resolve()
+        }, 1000)
+        onFlushed = () => {
+          clearTimeout(timer)
+          onFlushed = null
+          resolve()
+        }
+        node.port.postMessage({ command: 'flush' })
+      })
+
       try {
         node.disconnect()
         merger.disconnect()

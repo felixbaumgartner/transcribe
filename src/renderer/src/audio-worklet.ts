@@ -18,6 +18,13 @@ class ChunkerProcessor extends AudioWorkletProcessor {
     this.chunkSamples = Math.floor(sampleRate * CHUNK_SECONDS)
     this.overlapSamples = Math.floor(sampleRate * OVERLAP_SECONDS)
     this.buffer = new Float32Array(this.chunkSamples)
+
+    this.port.onmessage = (e) => {
+      if (e.data?.command === 'flush') {
+        this.flush(true)
+        this.port.postMessage({ type: 'flushed' })
+      }
+    }
   }
 
   process(inputs: Float32Array[][]): boolean {
@@ -39,7 +46,16 @@ class ChunkerProcessor extends AudioWorkletProcessor {
     return true
   }
 
-  private flush(): void {
+  private flush(isFinal = false): void {
+    if (this.writeIdx === 0) return
+    // Skip very short tails — whisper produces nothing useful from <0.5s of audio
+    // and may emit hallucinations on a tiny clip.
+    const minSamples = Math.floor(sampleRate * 0.5)
+    if (isFinal && this.writeIdx < minSamples) {
+      this.writeIdx = 0
+      return
+    }
+
     const float = this.buffer.subarray(0, this.writeIdx)
     const pcm = new Int16Array(float.length)
     for (let i = 0; i < float.length; i++) {
@@ -56,7 +72,13 @@ class ChunkerProcessor extends AudioWorkletProcessor {
       [pcm.buffer]
     )
 
-    // Keep tail for overlap
+    if (isFinal) {
+      // Last chunk — no need to keep overlap.
+      this.writeIdx = 0
+      return
+    }
+
+    // Keep tail for overlap so the next chunk doesn't cut a word.
     const tail = Math.min(this.overlapSamples, this.writeIdx)
     if (tail > 0) {
       this.buffer.copyWithin(0, this.writeIdx - tail, this.writeIdx)

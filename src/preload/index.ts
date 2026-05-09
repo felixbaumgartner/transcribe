@@ -18,6 +18,8 @@ export interface WorkerStatus {
   model: boolean
   binaryPath: string
   modelPath: string
+  modelName: string
+  queuedChunks: number
 }
 
 const api = {

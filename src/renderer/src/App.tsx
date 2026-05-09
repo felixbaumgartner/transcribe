@@ -3,6 +3,7 @@ import { Recorder } from './components/Recorder'
 import { LiveTranscript } from './components/LiveTranscript'
 import { History } from './components/History'
 import { startCapture, type CaptureHandle, type ChunkMessage } from './audio-capture'
+import { mergeSegments } from './segments'
 import type { Segment, TranscriptListItem, WorkerStatus } from '../../preload/index'
 
 type View = 'live' | 'history'
@@ -54,6 +55,8 @@ export function App(): JSX.Element {
   const handleStart = useCallback(async () => {
     setError(null)
     setSegments([])
+    setPendingChunks(0)
+    pendingChunksRef.current = 0
     chunkOffsetRef.current = {}
 
     // Verify whisper assets exist before we start capturing — easier to surface the issue
@@ -89,6 +92,9 @@ export function App(): JSX.Element {
     const t0 = Date.now()
     while (pendingChunksRef.current > 0 && Date.now() - t0 < 60000) {
       await new Promise((r) => setTimeout(r, 100))
+    }
+    if (pendingChunksRef.current > 0) {
+      setError(`Stopped recording, but ${pendingChunksRef.current} chunk(s) are still transcribing. Try a smaller model if this keeps happening.`)
     }
 
     const final = segmentsRef.current
@@ -166,17 +172,4 @@ export function App(): JSX.Element {
       )}
     </div>
   )
-}
-
-/**
- * Merge new segments from a chunk into the running list.
- * Because consecutive chunks overlap by ~2s, we de-dup by checking if a new
- * segment's text already appears at the tail of the existing list.
- */
-function mergeSegments(prev: Segment[], next: Segment[]): Segment[] {
-  if (prev.length === 0) return next
-  if (next.length === 0) return prev
-  const tailWindow = prev.slice(-3).map((s) => s.text.trim()).join(' ')
-  const filtered = next.filter((s) => !tailWindow.includes(s.text.trim()))
-  return [...prev, ...filtered]
 }

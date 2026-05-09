@@ -49,7 +49,7 @@ WHISPER_MODEL=tiny.en   npm run fetch-model    # tiny / very fast
 WHISPER_MODEL=small     npm run fetch-model    # multilingual
 ```
 
-Then set the same `WHISPER_MODEL` env var when launching, or hardcode in `src/main/transcribe-worker.ts`.
+Then set the same `WHISPER_MODEL` env var when launching. The app reads `WHISPER_MODEL` at runtime, defaulting to `small.en` when it is not set.
 
 ## Project layout
 

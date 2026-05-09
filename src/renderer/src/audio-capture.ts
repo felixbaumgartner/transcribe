@@ -52,10 +52,11 @@ export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<
   await ctx.audioWorklet.addModule(workletUrl)
 
   const sysSrc = ctx.createMediaStreamSource(displayStream)
+  let micSrc: MediaStreamAudioSourceNode | null = null
   const merger = ctx.createGain()
   sysSrc.connect(merger)
   if (micStream) {
-    const micSrc = ctx.createMediaStreamSource(micStream)
+    micSrc = ctx.createMediaStreamSource(micStream)
     micSrc.connect(merger)
   }
 
@@ -114,6 +115,8 @@ export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<
         node.disconnect()
         merger.disconnect()
         sysSrc.disconnect()
+        micSrc?.disconnect()
+        silentSink.disconnect()
       } catch {}
       for (const s of [displayStream, micStream]) {
         if (!s) continue

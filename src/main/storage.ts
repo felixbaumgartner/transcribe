@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, relative, resolve, join } from 'node:path'
 
 export interface Segment {
   t0: number // seconds from start
@@ -23,7 +23,7 @@ function pad(n: number): string {
 }
 
 function fileNameFor(startedAt: Date): string {
-  return `${startedAt.getFullYear()}-${pad(startedAt.getMonth() + 1)}-${pad(startedAt.getDate())}-${pad(startedAt.getHours())}${pad(startedAt.getMinutes())}.md`
+  return `${startedAt.getFullYear()}-${pad(startedAt.getMonth() + 1)}-${pad(startedAt.getDate())}-${pad(startedAt.getHours())}${pad(startedAt.getMinutes())}${pad(startedAt.getSeconds())}.md`
 }
 
 function fmtTimestamp(seconds: number): string {
@@ -35,6 +35,9 @@ function fmtTimestamp(seconds: number): string {
 export async function writeMarkdownTranscript(startedAtIso: string, segments: Segment[]): Promise<string> {
   const dir = await ensureDir()
   const startedAt = new Date(startedAtIso)
+  if (Number.isNaN(startedAt.getTime())) {
+    throw new Error('Invalid transcript start time')
+  }
   const file = join(dir, fileNameFor(startedAt))
 
   const lines: string[] = []
@@ -78,6 +81,16 @@ export async function listTranscripts(): Promise<TranscriptListItem[]> {
 
 export async function readTranscript(file: string): Promise<string> {
   const dir = await ensureDir()
-  if (!file.startsWith(dir)) throw new Error('Refusing to read outside transcripts dir')
-  return fs.readFile(file, 'utf8')
+  const safePath = resolveInside(dir, file)
+  return fs.readFile(safePath, 'utf8')
+}
+
+function resolveInside(root: string, candidate: string): string {
+  const rootResolved = resolve(root)
+  const candidateResolved = resolve(candidate)
+  const rel = relative(rootResolved, candidateResolved)
+  if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
+    return candidateResolved
+  }
+  throw new Error('Refusing to read outside transcripts dir')
 }

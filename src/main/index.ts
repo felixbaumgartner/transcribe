@@ -22,7 +22,7 @@ function createWindow(): void {
     backgroundColor: '#0b0d12',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true
     }
   })
@@ -50,8 +50,8 @@ app.whenReady().then(() => {
 
   // Auto-grant media + display capture permissions for our own window.
   // We can do this safely because we control the renderer code.
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-    if (permission === 'media' || permission === 'display-capture') {
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback) => {
+    if (wc === mainWindow?.webContents && (permission === 'media' || permission === 'display-capture')) {
       callback(true)
       return
     }
@@ -67,17 +67,25 @@ app.whenReady().then(() => {
   session.defaultSession.setDisplayMediaRequestHandler(async (_request, callback) => {
     const { desktopCapturer } = await import('electron')
     const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } })
+    if (sources.length === 0) {
+      callback({})
+      return
+    }
     callback({ video: sources[0], audio: 'loopback' })
   })
 
   worker = new TranscribeWorker()
 
   ipcMain.handle('transcribe:chunk', async (_evt, payload: { id: number; pcm: ArrayBuffer; sampleRate: number }) => {
+    if (!Number.isInteger(payload.id) || payload.id < 0) throw new Error('Invalid chunk id')
+    if (!(payload.pcm instanceof ArrayBuffer)) throw new Error('Invalid chunk payload')
+    if (!Number.isFinite(payload.sampleRate) || payload.sampleRate <= 0) throw new Error('Invalid sample rate')
     const segments = await worker!.transcribeChunk(payload.id, Buffer.from(payload.pcm), payload.sampleRate)
     return segments
   })
 
   ipcMain.handle('storage:save', async (_evt, payload: { startedAt: string; segments: { t0: number; t1: number; text: string }[] }) => {
+    if (!Array.isArray(payload.segments)) throw new Error('Invalid transcript segments')
     const file = await writeMarkdownTranscript(payload.startedAt, payload.segments)
     return file
   })

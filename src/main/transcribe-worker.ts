@@ -18,6 +18,8 @@ interface WhisperJsonOutput {
   transcription: { offsets: { from: number; to: number }; text: string }[]
 }
 
+const MAX_QUEUED_CHUNKS = 6
+
 function whisperBinaryPath(): string {
   // In dev: resources/ sits next to the project root.
   // In packaged app: process.resourcesPath/whisper-bin/...
@@ -30,9 +32,13 @@ function whisperBinaryPath(): string {
   return join(base, 'whisper')
 }
 
+function modelName(): string {
+  return process.env.WHISPER_MODEL || 'small.en'
+}
+
 function modelPath(): string {
   // Stored in userData so it survives upgrades and is downloaded on first run.
-  return join(app.getPath('userData'), 'models', 'ggml-small.en.bin')
+  return join(app.getPath('userData'), 'models', `ggml-${modelName()}.bin`)
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -72,13 +78,16 @@ function pcmToWav(pcm: Buffer, sampleRate: number): Buffer {
 
 export class TranscribeWorker {
   private chain: Promise<Segment[]> = Promise.resolve([])
+  private queuedChunks = 0
 
-  async status(): Promise<{ binary: boolean; model: boolean; binaryPath: string; modelPath: string }> {
+  async status(): Promise<{ binary: boolean; model: boolean; binaryPath: string; modelPath: string; modelName: string; queuedChunks: number }> {
     return {
       binary: await fileExists(whisperBinaryPath()),
       model: await fileExists(modelPath()),
       binaryPath: whisperBinaryPath(),
-      modelPath: modelPath()
+      modelPath: modelPath(),
+      modelName: modelName(),
+      queuedChunks: this.queuedChunks
     }
   }
 
@@ -87,15 +96,31 @@ export class TranscribeWorker {
    * two whisper.cpp processes in parallel — keeps CPU usage predictable.
    */
   transcribeChunk(id: number, pcm: Buffer, sampleRate: number): Promise<Segment[]> {
+    if (this.queuedChunks >= MAX_QUEUED_CHUNKS) {
+      return Promise.reject(
+        new Error(`Transcription is falling behind (${this.queuedChunks} chunks queued). Stop recording or use a smaller model.`)
+      )
+    }
+
+    this.queuedChunks += 1
     const next = this.chain.then(() => this.runOnce(id, pcm, sampleRate))
     // Swallow rejection so a single bad chunk doesn't poison the queue.
     this.chain = next.catch(() => [] as Segment[])
-    return next
+    return next.finally(() => {
+      this.queuedChunks = Math.max(0, this.queuedChunks - 1)
+    })
   }
 
   private async runOnce(id: number, pcm: Buffer, sampleRate: number): Promise<Segment[]> {
     const bin = whisperBinaryPath()
     const model = modelPath()
+
+    if (sampleRate <= 0 || !Number.isFinite(sampleRate)) {
+      throw new Error(`Invalid sample rate for chunk ${id}: ${sampleRate}`)
+    }
+    if (pcm.length === 0) {
+      return []
+    }
 
     if (!(await fileExists(bin))) {
       throw new Error(`whisper binary missing at ${bin} — run "npm run fetch-whisper"`)

@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "test": "node --experimental-strip-types --test src/**/*.test.ts",
     "start": "electron-vite preview",
     "fetch-whisper": "node scripts/fetch-whisper.mjs",
     "fetch-model": "node scripts/fetch-model.mjs"

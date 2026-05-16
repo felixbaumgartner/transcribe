@@ -10,7 +10,40 @@
     "test": "node --experimental-strip-types --test src/**/*.test.ts",
     "start": "electron-vite preview",
     "fetch-whisper": "node scripts/fetch-whisper.mjs",
-    "fetch-model": "node scripts/fetch-model.mjs"
+    "fetch-model": "node scripts/fetch-model.mjs",
+    "dist": "electron-vite build && electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.transcribe.app",
+    "productName": "Transcribe",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/whisper-bin",
+        "to": "whisper-bin",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Transcribe",
+      "uninstallDisplayName": "Transcribe"
+    }
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.1",
@@ -24,6 +57,7 @@
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
     "postcss": "^8.4.49",
     "react": "^18.3.1",

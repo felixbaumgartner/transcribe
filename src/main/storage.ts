@@ -1,12 +1,14 @@
 import { app } from 'electron'
 import { promises as fs } from 'node:fs'
 import { isAbsolute, relative, resolve, join } from 'node:path'
+import {
+  renderTranscriptMarkdown,
+  transcriptFileName,
+  type Segment,
+  type Speaker
+} from './transcript-render.js'
 
-export interface Segment {
-  t0: number // seconds from start
-  t1: number
-  text: string
-}
+export type { Segment, Speaker }
 
 export function transcriptsDir(): string {
   return join(app.getPath('userData'), 'transcripts')
@@ -18,43 +20,15 @@ async function ensureDir(): Promise<string> {
   return dir
 }
 
-function pad(n: number): string {
-  return n.toString().padStart(2, '0')
-}
-
-function fileNameFor(startedAt: Date): string {
-  return `${startedAt.getFullYear()}-${pad(startedAt.getMonth() + 1)}-${pad(startedAt.getDate())}-${pad(startedAt.getHours())}${pad(startedAt.getMinutes())}${pad(startedAt.getSeconds())}.md`
-}
-
-function fmtTimestamp(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  return `${pad(m)}:${pad(s)}`
-}
-
 export async function writeMarkdownTranscript(startedAtIso: string, segments: Segment[]): Promise<string> {
   const dir = await ensureDir()
   const startedAt = new Date(startedAtIso)
   if (Number.isNaN(startedAt.getTime())) {
     throw new Error('Invalid transcript start time')
   }
-  const file = join(dir, fileNameFor(startedAt))
-
-  const lines: string[] = []
-  lines.push(`# Transcript — ${startedAt.toLocaleString()}`)
-  lines.push('')
-  lines.push(`Started: ${startedAt.toISOString()}`)
-  lines.push(`Segments: ${segments.length}`)
-  lines.push('')
-  lines.push('---')
-  lines.push('')
-
-  for (const seg of segments) {
-    lines.push(`**[${fmtTimestamp(seg.t0)}]** ${seg.text.trim()}`)
-    lines.push('')
-  }
-
-  await fs.writeFile(file, lines.join('\n'), 'utf8')
+  const file = join(dir, transcriptFileName(startedAt))
+  const body = renderTranscriptMarkdown(startedAt, segments)
+  await fs.writeFile(file, body, 'utf8')
   return file
 }
 

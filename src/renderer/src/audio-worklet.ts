@@ -1,7 +1,12 @@
 // AudioWorklet processor: collects mono Float32 audio at the AudioContext sample rate
 // (we configure it to 16000 Hz on the renderer side) and emits 16-bit PCM chunks
-// back to the main thread every CHUNK_SECONDS, with OVERLAP_SECONDS of overlap so
+// back to the main thread every chunkSeconds, with overlapSeconds of overlap so
 // whisper doesn't cut words at chunk boundaries.
+//
+// processorOptions: { source?: 'you' | 'others'; chunkSeconds?: number; overlapSeconds?: number }
+//   Each instance is dedicated to a single audio source (mic or system). The source tag
+//   is stamped on every outgoing message so the main thread can route chunks to the
+//   right transcription queue and label segments downstream.
 
 class ChunkerProcessor extends AudioWorkletProcessor {
   private chunkSamples: number
@@ -9,20 +14,27 @@ class ChunkerProcessor extends AudioWorkletProcessor {
   private buffer: Float32Array
   private writeIdx = 0
   private chunkId = 0
+  private source: 'you' | 'others' | undefined
 
-  constructor() {
+  constructor(options?: AudioWorkletNodeOptions) {
     super()
+    const opts = (options?.processorOptions ?? {}) as {
+      source?: 'you' | 'others'
+      chunkSeconds?: number
+      overlapSeconds?: number
+    }
+    this.source = opts.source
+    const chunkSeconds = typeof opts.chunkSeconds === 'number' && opts.chunkSeconds > 0 ? opts.chunkSeconds : 30
+    const overlapSeconds = typeof opts.overlapSeconds === 'number' && opts.overlapSeconds >= 0 ? opts.overlapSeconds : 2
     // sampleRate is a global in AudioWorkletGlobalScope.
-    const CHUNK_SECONDS = 30
-    const OVERLAP_SECONDS = 2
-    this.chunkSamples = Math.floor(sampleRate * CHUNK_SECONDS)
-    this.overlapSamples = Math.floor(sampleRate * OVERLAP_SECONDS)
+    this.chunkSamples = Math.floor(sampleRate * chunkSeconds)
+    this.overlapSamples = Math.floor(sampleRate * overlapSeconds)
     this.buffer = new Float32Array(this.chunkSamples)
 
     this.port.onmessage = (e) => {
       if (e.data?.command === 'flush') {
         this.flush(true)
-        this.port.postMessage({ type: 'flushed' })
+        this.port.postMessage({ type: 'flushed', source: this.source })
       }
     }
   }
@@ -67,7 +79,8 @@ class ChunkerProcessor extends AudioWorkletProcessor {
       {
         id: this.chunkId++,
         pcm: pcm.buffer,
-        sampleRate
+        sampleRate,
+        source: this.source
       },
       [pcm.buffer]
     )

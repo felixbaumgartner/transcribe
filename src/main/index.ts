@@ -22,7 +22,11 @@ function createWindow(): void {
     backgroundColor: '#0b0d12',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
-      sandbox: true,
+      // sandbox must be false for ESM preload (.mjs with import statements) on
+      // Electron 28+. contextIsolation: true still keeps the renderer in its own
+      // context with no Node access — which is the security property we care about
+      // for a local-only app.
+      sandbox: false,
       contextIsolation: true
     }
   })
@@ -76,15 +80,15 @@ app.whenReady().then(() => {
 
   worker = new TranscribeWorker()
 
-  ipcMain.handle('transcribe:chunk', async (_evt, payload: { id: number; pcm: ArrayBuffer; sampleRate: number }) => {
+  ipcMain.handle('transcribe:chunk', async (_evt, payload: { id: number; pcm: ArrayBuffer; sampleRate: number; source: 'you' | 'others' }) => {
     if (!Number.isInteger(payload.id) || payload.id < 0) throw new Error('Invalid chunk id')
     if (!(payload.pcm instanceof ArrayBuffer)) throw new Error('Invalid chunk payload')
     if (!Number.isFinite(payload.sampleRate) || payload.sampleRate <= 0) throw new Error('Invalid sample rate')
-    const segments = await worker!.transcribeChunk(payload.id, Buffer.from(payload.pcm), payload.sampleRate)
-    return segments
+    if (payload.source !== 'you' && payload.source !== 'others') throw new Error('Invalid source')
+    return await worker!.transcribeChunk(payload.id, Buffer.from(payload.pcm), payload.sampleRate, payload.source)
   })
 
-  ipcMain.handle('storage:save', async (_evt, payload: { startedAt: string; segments: { t0: number; t1: number; text: string }[] }) => {
+  ipcMain.handle('storage:save', async (_evt, payload: { startedAt: string; segments: { t0: number; t1: number; text: string; speaker?: 'you' | 'others' }[] }) => {
     if (!Array.isArray(payload.segments)) throw new Error('Invalid transcript segments')
     const file = await writeMarkdownTranscript(payload.startedAt, payload.segments)
     return file

@@ -3,23 +3,42 @@
 // 1. getDisplayMedia({audio:true})  → system audio (the other meeting participants)
 // 2. getUserMedia({audio:true})     → your mic
 // 3. Both are connected into a single AudioContext running at 16 kHz
-// 4. An AudioWorklet emits 30-second Int16 PCM chunks (with 2s overlap)
-// 5. Each chunk is sent to the main process for whisper.cpp transcription
+// 4. Each source feeds its OWN AudioWorklet (tagged 'others' for system, 'you' for mic),
+//    so each stream is chunked and transcribed independently — that's what powers
+//    speaker labels downstream without needing a diarization model.
+// 5. Each worklet emits Int16 PCM chunks (6s with 1s overlap by default), tagged with
+//    its source, which the main process routes into per-source whisper.cpp queues.
 //
 // Why 16 kHz: whisper.cpp consumes 16 kHz mono PCM. Constructing the AudioContext
 // at this rate makes the browser do the resampling for us — simpler than rolling our own.
 
 import workletUrl from './audio-worklet.ts?worker&url'
+import type { Speaker } from '../../preload/index'
+
+const CHUNK_SECONDS = 6
+const OVERLAP_SECONDS = 1
 
 export interface CaptureHandle {
   stop(): Promise<void>
   startedAt: Date
+  micAvailable: boolean
+  chunkSeconds: number
+  overlapSeconds: number
 }
 
 export interface ChunkMessage {
   id: number
   pcm: ArrayBuffer
   sampleRate: number
+  source: Speaker
+}
+
+interface SourceWorklet {
+  node: AudioWorkletNode
+  src: MediaStreamAudioSourceNode
+  source: Speaker
+  flushed: Promise<void>
+  resolveFlushed: () => void
 }
 
 export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<CaptureHandle> {
@@ -38,7 +57,7 @@ export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<
     )
   }
 
-  // Mic — best-effort; if denied we still record system audio
+  // Mic — best-effort; if denied we still record system audio (and label everything 'others').
   let micStream: MediaStream | null = null
   try {
     micStream = await navigator.mediaDevices.getUserMedia({
@@ -51,71 +70,87 @@ export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<
   const ctx = new AudioContext({ sampleRate: 16000 })
   await ctx.audioWorklet.addModule(workletUrl)
 
-  const sysSrc = ctx.createMediaStreamSource(displayStream)
-  let micSrc: MediaStreamAudioSourceNode | null = null
-  const merger = ctx.createGain()
-  sysSrc.connect(merger)
-  if (micStream) {
-    micSrc = ctx.createMediaStreamSource(micStream)
-    micSrc.connect(merger)
+  const worklets: SourceWorklet[] = []
+
+  const makeWorklet = (stream: MediaStream, source: Speaker): SourceWorklet => {
+    const src = ctx.createMediaStreamSource(stream)
+    const node = new AudioWorkletNode(ctx, 'chunker', {
+      numberOfInputs: 1,
+      numberOfOutputs: 0,
+      channelCount: 1,
+      channelCountMode: 'explicit',
+      channelInterpretation: 'speakers',
+      processorOptions: {
+        source,
+        chunkSeconds: CHUNK_SECONDS,
+        overlapSeconds: OVERLAP_SECONDS
+      }
+    })
+    let resolveFlushed: () => void = () => {}
+    const flushed = new Promise<void>((resolve) => {
+      resolveFlushed = resolve
+    })
+    node.port.onmessage = (e) => {
+      const msg = e.data
+      if (msg?.type === 'flushed') {
+        resolveFlushed()
+        return
+      }
+      if (msg?.type) return
+      onChunk({
+        id: msg.id,
+        pcm: msg.pcm,
+        sampleRate: msg.sampleRate,
+        source: msg.source ?? source
+      })
+    }
+    src.connect(node)
+    return { node, src, source, flushed, resolveFlushed }
   }
 
-  const node = new AudioWorkletNode(ctx, 'chunker', {
-    numberOfInputs: 1,
-    numberOfOutputs: 0,
-    channelCount: 1,
-    channelCountMode: 'explicit',
-    channelInterpretation: 'speakers'
-  })
-  // Single dispatcher for everything coming from the worklet. Typed messages
-  // (e.g. 'flushed') are control signals; un-typed messages are real audio chunks.
-  let onFlushed: (() => void) | null = null
-  node.port.onmessage = (e) => {
-    const msg = e.data
-    if (msg?.type === 'flushed') {
-      onFlushed?.()
-      return
-    }
-    if (msg?.type) return
-    onChunk(msg as ChunkMessage)
+  worklets.push(makeWorklet(displayStream, 'others'))
+  if (micStream) {
+    worklets.push(makeWorklet(micStream, 'you'))
   }
-  merger.connect(node)
 
   // Pump the graph to a muted destination so the AudioContext actually runs even though
-  // our sink AudioWorkletNode has no outputs of its own.
+  // our sink AudioWorkletNodes have no outputs of their own. A single silent sink is
+  // enough — we just need one connection to ctx.destination to keep the graph alive.
   const silentSink = ctx.createGain()
   silentSink.gain.value = 0
-  merger.connect(silentSink)
+  for (const w of worklets) {
+    w.src.connect(silentSink)
+  }
   silentSink.connect(ctx.destination)
 
   // AudioContext can start suspended on Windows when created after an awaited gesture.
   if (ctx.state === 'suspended') await ctx.resume()
 
   const startedAt = new Date()
+  const micAvailable = micStream !== null
 
   return {
     startedAt,
+    micAvailable,
+    chunkSeconds: CHUNK_SECONDS,
+    overlapSeconds: OVERLAP_SECONDS,
     async stop() {
-      // Ask the worklet to flush whatever's left in its buffer (the last <30s of audio)
+      // Ask all worklets to flush whatever's left in their buffers (the last tail of audio)
       // before tearing down, otherwise the tail of the recording is silently discarded.
-      await new Promise<void>((resolve) => {
-        const timer = setTimeout(() => {
-          onFlushed = null
-          resolve()
-        }, 1000)
-        onFlushed = () => {
-          clearTimeout(timer)
-          onFlushed = null
-          resolve()
-        }
-        node.port.postMessage({ command: 'flush' })
-      })
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, 1500))
+      const flushAll = Promise.all(
+        worklets.map((w) => {
+          w.node.port.postMessage({ command: 'flush' })
+          return w.flushed
+        })
+      ).then(() => undefined)
+      await Promise.race([flushAll, timeout])
 
       try {
-        node.disconnect()
-        merger.disconnect()
-        sysSrc.disconnect()
-        micSrc?.disconnect()
+        for (const w of worklets) {
+          w.node.disconnect()
+          w.src.disconnect()
+        }
         silentSink.disconnect()
       } catch {}
       for (const s of [displayStream, micStream]) {

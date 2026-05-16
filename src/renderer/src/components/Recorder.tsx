@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
-import type { WorkerStatus } from '../../../preload/index'
+import type { QueuedChunks, WorkerStatus } from '../../../preload/index'
 
 interface Props {
   recording: boolean
-  pendingChunks: number
+  pendingChunks: QueuedChunks
   onStart: () => void
   onStop: () => void
   status: WorkerStatus | null
@@ -23,6 +23,7 @@ export function Recorder({ recording, pendingChunks, onStart, onStop, status }: 
   }, [recording])
 
   const ready = status?.binary && status?.model
+  const pendingLabel = `you:${pendingChunks.you} others:${pendingChunks.others}`
 
   return (
     <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-5">
@@ -51,7 +52,7 @@ export function Recorder({ recording, pendingChunks, onStart, onStop, status }: 
           </div>
           <div className="text-xs text-zinc-500">
             {recording
-              ? `${formatElapsed(elapsed)} · ${pendingChunks} chunks pending`
+              ? `${formatElapsed(elapsed)} · ${pendingLabel}`
               : ready
                 ? 'Captures system audio + your mic. Transcripts stay on your machine.'
                 : 'Run npm run fetch-whisper && npm run fetch-model'}

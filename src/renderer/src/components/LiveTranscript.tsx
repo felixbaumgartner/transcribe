@@ -27,14 +27,29 @@ export function LiveTranscript({ segments }: Props): JSX.Element {
   return (
     <div ref={scrollRef} className="transcript-text flex-1 overflow-y-auto px-6 py-5">
       <div className="mx-auto max-w-3xl space-y-3">
-        {segments.map((s, i) => (
-          <div key={i} className="leading-relaxed">
-            <span className="mr-2 select-none font-mono text-xs text-zinc-600">
-              {fmt(s.t0)}
-            </span>
-            <span className="text-zinc-100">{s.text.trim()}</span>
-          </div>
-        ))}
+        {segments.map((s, i) => {
+          const isYou = s.speaker === 'you'
+          const isOthers = s.speaker === 'others'
+          const textColor = isYou ? 'text-emerald-300' : 'text-zinc-100'
+          return (
+            <div key={i} className="leading-relaxed">
+              <span className="mr-2 select-none font-mono text-xs text-zinc-600">
+                {fmt(s.t0)}
+              </span>
+              {isYou && (
+                <span className="mr-2 select-none text-xs font-semibold uppercase tracking-wide text-emerald-400">
+                  You
+                </span>
+              )}
+              {isOthers && (
+                <span className="mr-2 select-none text-xs font-semibold uppercase tracking-wide text-zinc-400">
+                  Others
+                </span>
+              )}
+              <span className={textColor}>{s.text.trim()}</span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

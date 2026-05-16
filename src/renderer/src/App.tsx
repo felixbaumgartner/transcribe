@@ -4,25 +4,31 @@ import { LiveTranscript } from './components/LiveTranscript'
 import { History } from './components/History'
 import { startCapture, type CaptureHandle, type ChunkMessage } from './audio-capture'
 import { mergeSegments } from './segments'
-import type { Segment, TranscriptListItem, WorkerStatus } from '../../preload/index'
+import type { Segment, TranscriptListItem, WorkerStatus, QueuedChunks } from '../../preload/index'
 
 type View = 'live' | 'history'
+
+const EMPTY_PENDING: QueuedChunks = { you: 0, others: 0 }
 
 export function App(): JSX.Element {
   const [recording, setRecording] = useState(false)
   const [segments, setSegments] = useState<Segment[]>([])
-  const [pendingChunks, setPendingChunks] = useState(0)
+  const [pendingChunks, setPendingChunks] = useState<QueuedChunks>(EMPTY_PENDING)
   const [view, setView] = useState<View>('live')
   const [history, setHistory] = useState<TranscriptListItem[]>([])
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<WorkerStatus | null>(null)
   const [viewingFile, setViewingFile] = useState<{ name: string; body: string } | null>(null)
+  const [micAvailable, setMicAvailable] = useState(true)
   const captureRef = useRef<CaptureHandle | null>(null)
-  const pendingChunksRef = useRef(0)
+  const pendingChunksRef = useRef<QueuedChunks>({ ...EMPTY_PENDING })
 
-  // Stable elapsed-seconds offset per chunk so segment timestamps line up across chunks
-  const chunkOffsetRef = useRef<Record<number, number>>({})
-  const chunkSecondsRef = useRef(28) // 30s chunk - 2s overlap
+  // Stable elapsed-seconds offset per chunk so segment timestamps line up across chunks.
+  // Keyed by `${source}-${id}` because each source has its own chunk counter.
+  const chunkOffsetRef = useRef<Record<string, number>>({})
+  // Effective new audio per chunk = chunkSeconds - overlapSeconds. Source of truth lives
+  // in audio-capture.ts; we mirror it here once at start.
+  const chunkStrideRef = useRef(5)
 
   const refreshHistory = useCallback(async () => {
     setHistory(await window.api.listTranscripts())
@@ -34,29 +40,45 @@ export function App(): JSX.Element {
   }, [refreshHistory])
 
   const handleChunk = useCallback(async (chunk: ChunkMessage) => {
-    pendingChunksRef.current += 1
-    setPendingChunks((n) => n + 1)
-    // Record the absolute time offset for this chunk (in elapsed seconds since recording started)
-    chunkOffsetRef.current[chunk.id] = chunk.id * chunkSecondsRef.current
+    const key = `${chunk.source}-${chunk.id}`
+    pendingChunksRef.current = {
+      ...pendingChunksRef.current,
+      [chunk.source]: pendingChunksRef.current[chunk.source] + 1
+    }
+    setPendingChunks((p) => ({ ...p, [chunk.source]: p[chunk.source] + 1 }))
+    chunkOffsetRef.current[key] = chunk.id * chunkStrideRef.current
     try {
-      const segs = await window.api.transcribeChunk(chunk.id, chunk.pcm, chunk.sampleRate)
-      const offset = chunkOffsetRef.current[chunk.id] ?? 0
-      const adjusted = segs.map((s) => ({ ...s, t0: s.t0 + offset, t1: s.t1 + offset }))
+      const { segments: segs } = await window.api.transcribeChunk(
+        chunk.id,
+        chunk.pcm,
+        chunk.sampleRate,
+        chunk.source
+      )
+      const offset = chunkOffsetRef.current[key] ?? 0
+      const adjusted = segs.map((s) => ({
+        ...s,
+        t0: s.t0 + offset,
+        t1: s.t1 + offset,
+        speaker: s.speaker ?? chunk.source
+      }))
       setSegments((prev) => mergeSegments(prev, adjusted))
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
     } finally {
-      pendingChunksRef.current -= 1
-      setPendingChunks((n) => n - 1)
+      pendingChunksRef.current = {
+        ...pendingChunksRef.current,
+        [chunk.source]: Math.max(0, pendingChunksRef.current[chunk.source] - 1)
+      }
+      setPendingChunks((p) => ({ ...p, [chunk.source]: Math.max(0, p[chunk.source] - 1) }))
     }
   }, [])
 
   const handleStart = useCallback(async () => {
     setError(null)
     setSegments([])
-    setPendingChunks(0)
-    pendingChunksRef.current = 0
+    setPendingChunks(EMPTY_PENDING)
+    pendingChunksRef.current = { ...EMPTY_PENDING }
     chunkOffsetRef.current = {}
 
     // Verify whisper assets exist before we start capturing — easier to surface the issue
@@ -72,7 +94,10 @@ export function App(): JSX.Element {
     }
 
     try {
-      captureRef.current = await startCapture(handleChunk)
+      const handle = await startCapture(handleChunk)
+      captureRef.current = handle
+      chunkStrideRef.current = handle.chunkSeconds - handle.overlapSeconds
+      setMicAvailable(handle.micAvailable)
       setRecording(true)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -90,11 +115,15 @@ export function App(): JSX.Element {
     // Drain any in-flight chunks before saving, so the tail flushed at stop-time
     // makes it into the saved file. Uses a ref so we don't depend on stale React state.
     const t0 = Date.now()
-    while (pendingChunksRef.current > 0 && Date.now() - t0 < 60000) {
+    while (
+      (pendingChunksRef.current.you > 0 || pendingChunksRef.current.others > 0) &&
+      Date.now() - t0 < 60000
+    ) {
       await new Promise((r) => setTimeout(r, 100))
     }
-    if (pendingChunksRef.current > 0) {
-      setError(`Stopped recording, but ${pendingChunksRef.current} chunk(s) are still transcribing. Try a smaller model if this keeps happening.`)
+    const stillPending = pendingChunksRef.current.you + pendingChunksRef.current.others
+    if (stillPending > 0) {
+      setError(`Stopped recording, but ${stillPending} chunk(s) are still transcribing. Try a smaller model if this keeps happening.`)
     }
 
     const final = segmentsRef.current
@@ -143,6 +172,12 @@ export function App(): JSX.Element {
       {error && (
         <div className="border-b border-red-900/50 bg-red-950/40 px-5 py-3 text-sm text-red-200 whitespace-pre-wrap">
           {error}
+        </div>
+      )}
+
+      {recording && !micAvailable && (
+        <div className="border-b border-amber-900/50 bg-amber-950/30 px-5 py-2 text-xs text-amber-200">
+          Mic denied — labeling everything as Others.
         </div>
       )}
 

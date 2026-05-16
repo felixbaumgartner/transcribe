@@ -8,17 +8,26 @@ import { fileURLToPath } from 'node:url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
+export type Speaker = 'you' | 'others'
+
 export interface Segment {
   t0: number
   t1: number
   text: string
+  speaker?: Speaker
+}
+
+export interface TranscribeChunkResult {
+  source: Speaker
+  segments: Segment[]
 }
 
 interface WhisperJsonOutput {
   transcription: { offsets: { from: number; to: number }; text: string }[]
 }
 
-const MAX_QUEUED_CHUNKS = 6
+// With 6s chunks (was 30s), the same ~48s of audio backlog → ceiling 8 per source.
+const MAX_QUEUED_CHUNKS_PER_SOURCE = 8
 
 function whisperBinaryPath(): string {
   // In dev: resources/ sits next to the project root.
@@ -77,41 +86,96 @@ function pcmToWav(pcm: Buffer, sampleRate: number): Buffer {
 }
 
 export class TranscribeWorker {
-  private chain: Promise<Segment[]> = Promise.resolve([])
-  private queuedChunks = 0
+  // Per-source promise chains preserve in-source FIFO ordering so a slow chunk
+  // on one source can't reorder its own siblings.
+  private chains: Record<Speaker, Promise<unknown>> = {
+    you: Promise.resolve(),
+    others: Promise.resolve()
+  }
+  // Single cross-source mutex: only one whisper.cpp process at a time. Running two
+  // in parallel would double CPU and cancel the latency win we got from smaller chunks.
+  private inflight: Promise<unknown> = Promise.resolve()
+  private queuedChunks: Record<Speaker, number> = { you: 0, others: 0 }
 
-  async status(): Promise<{ binary: boolean; model: boolean; binaryPath: string; modelPath: string; modelName: string; queuedChunks: number }> {
+  async status(): Promise<{
+    binary: boolean
+    model: boolean
+    binaryPath: string
+    modelPath: string
+    modelName: string
+    queuedChunks: Record<Speaker, number>
+  }> {
     return {
       binary: await fileExists(whisperBinaryPath()),
       model: await fileExists(modelPath()),
       binaryPath: whisperBinaryPath(),
       modelPath: modelPath(),
       modelName: modelName(),
-      queuedChunks: this.queuedChunks
+      queuedChunks: { ...this.queuedChunks }
     }
   }
 
   /**
-   * Transcribe a single PCM chunk. Calls are queued via this.chain so we never run
-   * two whisper.cpp processes in parallel — keeps CPU usage predictable.
+   * Transcribe a single PCM chunk. Calls are ordered per-source via this.chains
+   * and serialized across sources via this.inflight so we never run two whisper.cpp
+   * processes in parallel — keeps CPU usage predictable.
    */
-  transcribeChunk(id: number, pcm: Buffer, sampleRate: number): Promise<Segment[]> {
-    if (this.queuedChunks >= MAX_QUEUED_CHUNKS) {
+  transcribeChunk(
+    id: number,
+    pcm: Buffer,
+    sampleRate: number,
+    source: Speaker
+  ): Promise<TranscribeChunkResult> {
+    if (this.queuedChunks[source] >= MAX_QUEUED_CHUNKS_PER_SOURCE) {
       return Promise.reject(
-        new Error(`Transcription is falling behind (${this.queuedChunks} chunks queued). Stop recording or use a smaller model.`)
+        new Error(
+          `Transcription is falling behind on '${source}' (${this.queuedChunks[source]} chunks queued). Stop recording or use a smaller model.`
+        )
       )
     }
 
-    this.queuedChunks += 1
-    const next = this.chain.then(() => this.runOnce(id, pcm, sampleRate))
+    this.queuedChunks[source] += 1
+    const next = this.chains[source].then(() => this.runWithLock(id, pcm, sampleRate, source))
     // Swallow rejection so a single bad chunk doesn't poison the queue.
-    this.chain = next.catch(() => [] as Segment[])
-    return next.finally(() => {
-      this.queuedChunks = Math.max(0, this.queuedChunks - 1)
-    })
+    this.chains[source] = next.catch(() => [] as Segment[])
+    return next
+      .then((segments) => ({ source, segments }))
+      .finally(() => {
+        this.queuedChunks[source] = Math.max(0, this.queuedChunks[source] - 1)
+      })
   }
 
-  private async runOnce(id: number, pcm: Buffer, sampleRate: number): Promise<Segment[]> {
+  /** Take the global whisper lock, run the transcription, release the lock. */
+  private async runWithLock(
+    id: number,
+    pcm: Buffer,
+    sampleRate: number,
+    source: Speaker
+  ): Promise<Segment[]> {
+    const wait = this.inflight
+    let release: () => void = () => {}
+    const lock = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    this.inflight = lock
+    try {
+      await wait
+    } catch {
+      // Previous inflight rejection shouldn't block us.
+    }
+    try {
+      return await this.runOnce(id, pcm, sampleRate, source)
+    } finally {
+      release()
+    }
+  }
+
+  private async runOnce(
+    id: number,
+    pcm: Buffer,
+    sampleRate: number,
+    source: Speaker
+  ): Promise<Segment[]> {
     const bin = whisperBinaryPath()
     const model = modelPath()
 
@@ -131,7 +195,7 @@ export class TranscribeWorker {
 
     const tmpDir = join(app.getPath('userData'), 'tmp')
     await fs.mkdir(tmpDir, { recursive: true })
-    const wavPath = join(tmpDir, `chunk-${id}.wav`)
+    const wavPath = join(tmpDir, `chunk-${source}-${id}.wav`)
     const jsonPath = `${wavPath}.json`
 
     await fs.writeFile(wavPath, pcmToWav(pcm, sampleRate))
@@ -162,7 +226,8 @@ export class TranscribeWorker {
       return (parsed.transcription || []).map((t) => ({
         t0: t.offsets.from / 1000,
         t1: t.offsets.to / 1000,
-        text: t.text
+        text: t.text,
+        speaker: source
       }))
     } finally {
       // Best-effort cleanup; leave on failure for debugging.

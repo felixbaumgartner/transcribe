@@ -4,9 +4,8 @@ import { isAbsolute, relative, resolve, join } from 'node:path'
 import {
   renderTranscriptMarkdown,
   transcriptFileName,
-  type Segment,
-  type Speaker
 } from './transcript-render.js'
+import type { Segment, Speaker, TranscriptListItem } from '../shared/transcript.js'
 
 export type { Segment, Speaker }
 
@@ -30,13 +29,6 @@ export async function writeMarkdownTranscript(startedAtIso: string, segments: Se
   const body = renderTranscriptMarkdown(startedAt, segments)
   await fs.writeFile(file, body, 'utf8')
   return file
-}
-
-export interface TranscriptListItem {
-  file: string
-  name: string
-  size: number
-  mtime: string
 }
 
 export async function listTranscripts(): Promise<TranscriptListItem[]> {

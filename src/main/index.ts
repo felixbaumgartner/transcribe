@@ -4,6 +4,10 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { writeMarkdownTranscript, listTranscripts, readTranscript, transcriptsDir } from './storage.js'
 import { TranscribeWorker } from './transcribe-worker.js'
+import {
+  validateSaveTranscriptPayload,
+  validateTranscribeChunkPayload
+} from '../shared/transcript.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -80,16 +84,13 @@ app.whenReady().then(() => {
 
   worker = new TranscribeWorker()
 
-  ipcMain.handle('transcribe:chunk', async (_evt, payload: { id: number; pcm: ArrayBuffer; sampleRate: number; source: 'you' | 'others' }) => {
-    if (!Number.isInteger(payload.id) || payload.id < 0) throw new Error('Invalid chunk id')
-    if (!(payload.pcm instanceof ArrayBuffer)) throw new Error('Invalid chunk payload')
-    if (!Number.isFinite(payload.sampleRate) || payload.sampleRate <= 0) throw new Error('Invalid sample rate')
-    if (payload.source !== 'you' && payload.source !== 'others') throw new Error('Invalid source')
+  ipcMain.handle('transcribe:chunk', async (_evt, rawPayload: unknown) => {
+    const payload = validateTranscribeChunkPayload(rawPayload)
     return await worker!.transcribeChunk(payload.id, Buffer.from(payload.pcm), payload.sampleRate, payload.source)
   })
 
-  ipcMain.handle('storage:save', async (_evt, payload: { startedAt: string; segments: { t0: number; t1: number; text: string; speaker?: 'you' | 'others' }[] }) => {
-    if (!Array.isArray(payload.segments)) throw new Error('Invalid transcript segments')
+  ipcMain.handle('storage:save', async (_evt, rawPayload: unknown) => {
+    const payload = validateSaveTranscriptPayload(rawPayload)
     const file = await writeMarkdownTranscript(payload.startedAt, payload.segments)
     return file
   })

@@ -1,39 +1,20 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type {
+  Segment,
+  Speaker,
+  TranscriptListItem,
+  TranscribeChunkResult,
+  WorkerStatus
+} from '../shared/transcript'
 
-export type Speaker = 'you' | 'others'
-
-export interface Segment {
-  t0: number
-  t1: number
-  text: string
-  speaker?: Speaker
-}
-
-export interface TranscriptListItem {
-  file: string
-  name: string
-  size: number
-  mtime: string
-}
-
-export interface QueuedChunks {
-  you: number
-  others: number
-}
-
-export interface WorkerStatus {
-  binary: boolean
-  model: boolean
-  binaryPath: string
-  modelPath: string
-  modelName: string
-  queuedChunks: QueuedChunks
-}
-
-export interface TranscribeChunkResult {
-  source: Speaker
-  segments: Segment[]
-}
+export type {
+  QueuedChunks,
+  Segment,
+  Speaker,
+  TranscriptListItem,
+  TranscribeChunkResult,
+  WorkerStatus
+} from '../shared/transcript'
 
 const api = {
   transcribeChunk(

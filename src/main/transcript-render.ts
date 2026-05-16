@@ -1,14 +1,8 @@
 // Pure (no-Electron) rendering of a transcript to markdown. Split out from storage.ts
 // so it can be unit-tested without spinning up the Electron module graph.
 
-export type Speaker = 'you' | 'others'
-
-export interface Segment {
-  t0: number
-  t1: number
-  text: string
-  speaker?: Speaker
-}
+import type { Segment, Speaker } from '../shared/transcript.js'
+export type { Segment, Speaker } from '../shared/transcript.js'
 
 function pad(n: number): string {
   return n.toString().padStart(2, '0')

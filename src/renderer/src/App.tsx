@@ -22,6 +22,7 @@ export function App(): JSX.Element {
   const [micAvailable, setMicAvailable] = useState(true)
   const captureRef = useRef<CaptureHandle | null>(null)
   const pendingChunksRef = useRef<QueuedChunks>({ ...EMPTY_PENDING })
+  const sessionIdRef = useRef(0)
 
   // Stable elapsed-seconds offset per chunk so segment timestamps line up across chunks.
   // Keyed by `${source}-${id}` because each source has its own chunk counter.
@@ -39,7 +40,8 @@ export function App(): JSX.Element {
     refreshHistory()
   }, [refreshHistory])
 
-  const handleChunk = useCallback(async (chunk: ChunkMessage) => {
+  const handleChunk = useCallback(async (chunk: ChunkMessage, sessionId: number) => {
+    if (sessionId !== sessionIdRef.current) return
     const key = `${chunk.source}-${chunk.id}`
     pendingChunksRef.current = {
       ...pendingChunksRef.current,
@@ -61,11 +63,14 @@ export function App(): JSX.Element {
         t1: s.t1 + offset,
         speaker: s.speaker ?? chunk.source
       }))
+      if (sessionId !== sessionIdRef.current) return
       setSegments((prev) => mergeSegments(prev, adjusted))
     } catch (err: unknown) {
+      if (sessionId !== sessionIdRef.current) return
       const msg = err instanceof Error ? err.message : String(err)
       setError(msg)
     } finally {
+      if (sessionId !== sessionIdRef.current) return
       pendingChunksRef.current = {
         ...pendingChunksRef.current,
         [chunk.source]: Math.max(0, pendingChunksRef.current[chunk.source] - 1)
@@ -75,6 +80,8 @@ export function App(): JSX.Element {
   }, [])
 
   const handleStart = useCallback(async () => {
+    const sessionId = sessionIdRef.current + 1
+    sessionIdRef.current = sessionId
     setError(null)
     setSegments([])
     setPendingChunks(EMPTY_PENDING)
@@ -94,7 +101,11 @@ export function App(): JSX.Element {
     }
 
     try {
-      const handle = await startCapture(handleChunk)
+      const handle = await startCapture((chunk) => handleChunk(chunk, sessionId))
+      if (sessionId !== sessionIdRef.current) {
+        await handle.stop()
+        return
+      }
       captureRef.current = handle
       chunkStrideRef.current = handle.chunkSeconds - handle.overlapSeconds
       setMicAvailable(handle.micAvailable)
@@ -106,9 +117,11 @@ export function App(): JSX.Element {
   }, [handleChunk])
 
   const handleStop = useCallback(async () => {
+    const sessionId = sessionIdRef.current
     const handle = captureRef.current
     if (!handle) return
     await handle.stop()
+    if (sessionId !== sessionIdRef.current) return
     captureRef.current = null
     setRecording(false)
 
@@ -116,11 +129,13 @@ export function App(): JSX.Element {
     // makes it into the saved file. Uses a ref so we don't depend on stale React state.
     const t0 = Date.now()
     while (
+      sessionId === sessionIdRef.current &&
       (pendingChunksRef.current.you > 0 || pendingChunksRef.current.others > 0) &&
       Date.now() - t0 < 60000
     ) {
       await new Promise((r) => setTimeout(r, 100))
     }
+    if (sessionId !== sessionIdRef.current) return
     const stillPending = pendingChunksRef.current.you + pendingChunksRef.current.others
     if (stillPending > 0) {
       setError(`Stopped recording, but ${stillPending} chunk(s) are still transcribing. Try a smaller model if this keeps happening.`)

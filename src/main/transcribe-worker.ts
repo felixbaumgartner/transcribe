@@ -4,23 +4,10 @@ import { promises as fs } from 'node:fs'
 import { cpus } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { Segment, Speaker, TranscribeChunkResult } from '../shared/transcript.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-
-export type Speaker = 'you' | 'others'
-
-export interface Segment {
-  t0: number
-  t1: number
-  text: string
-  speaker?: Speaker
-}
-
-export interface TranscribeChunkResult {
-  source: Speaker
-  segments: Segment[]
-}
 
 interface WhisperJsonOutput {
   transcription: { offsets: { from: number; to: number }; text: string }[]
@@ -28,6 +15,7 @@ interface WhisperJsonOutput {
 
 // With 6s chunks (was 30s), the same ~48s of audio backlog → ceiling 8 per source.
 const MAX_QUEUED_CHUNKS_PER_SOURCE = 8
+const DEFAULT_WHISPER_TIMEOUT_MS = 120000
 
 function whisperBinaryPath(): string {
   // In dev: resources/ sits next to the project root.
@@ -48,6 +36,11 @@ function modelName(): string {
 function modelPath(): string {
   // Stored in userData so it survives upgrades and is downloaded on first run.
   return join(app.getPath('userData'), 'models', `ggml-${modelName()}.bin`)
+}
+
+function whisperTimeoutMs(): number {
+  const value = Number(process.env.WHISPER_TIMEOUT_MS)
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_WHISPER_TIMEOUT_MS
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -195,7 +188,8 @@ export class TranscribeWorker {
 
     const tmpDir = join(app.getPath('userData'), 'tmp')
     await fs.mkdir(tmpDir, { recursive: true })
-    const wavPath = join(tmpDir, `chunk-${source}-${id}.wav`)
+    const nonce = `${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2)}`
+    const wavPath = join(tmpDir, `chunk-${source}-${id}-${nonce}.wav`)
     const jsonPath = `${wavPath}.json`
 
     await fs.writeFile(wavPath, pcmToWav(pcm, sampleRate))
@@ -212,10 +206,19 @@ export class TranscribeWorker {
           '--no-prints'
         ]
         const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+        const timeoutMs = whisperTimeoutMs()
+        const timeout = setTimeout(() => {
+          proc.kill()
+          reject(new Error(`whisper timed out after ${timeoutMs}ms for chunk ${source}-${id}`))
+        }, timeoutMs)
         let stderr = ''
         proc.stderr.on('data', (d) => { stderr += d.toString() })
-        proc.on('error', reject)
+        proc.on('error', (err) => {
+          clearTimeout(timeout)
+          reject(err)
+        })
         proc.on('close', (code) => {
+          clearTimeout(timeout)
           if (code === 0) resolve()
           else reject(new Error(`whisper exited ${code}: ${stderr.slice(-500)}`))
         })

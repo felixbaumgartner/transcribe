@@ -22,6 +22,45 @@ export function modelUrl(): string {
   return `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${modelName()}.bin`
 }
 
+// Silero VAD: a ~1 MB neural speech detector whisper.cpp runs ahead of the
+// transcriber, so keyboard clatter / breathing / music never reach the decoder
+// (which otherwise hallucinates sentences over them).
+const VAD_MODEL_FILE = 'ggml-silero-v5.1.2.bin'
+
+export function vadModelPath(): string {
+  return join(app.getPath('userData'), 'models', VAD_MODEL_FILE)
+}
+
+/**
+ * Make sure the VAD model exists, downloading it (~1 MB) if needed. Returns
+ * its path, or null when unavailable (offline first run) — callers then just
+ * run without VAD.
+ */
+export async function ensureVadModel(): Promise<string | null> {
+  const target = vadModelPath()
+  try {
+    await fs.access(target)
+    return target
+  } catch {
+    // fall through to download
+  }
+  try {
+    const url = `https://huggingface.co/ggml-org/whisper-vad/resolve/main/${VAD_MODEL_FILE}`
+    const res = await fetch(url, { redirect: 'follow' })
+    if (!res.ok || !res.body) return null
+    await fs.mkdir(dirname(target), { recursive: true })
+    const partial = `${target}.download`
+    await pipeline(
+      Readable.fromWeb(res.body as import('stream/web').ReadableStream),
+      createWriteStream(partial)
+    )
+    await fs.rename(partial, target)
+    return target
+  } catch {
+    return null
+  }
+}
+
 let inflight: Promise<string> | null = null
 
 /**

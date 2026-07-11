@@ -101,6 +101,8 @@ export interface RefineOptions {
   binPath: string
   modelPath: string
   sampleRate: number
+  /** Silero VAD model path; omit/null to run without VAD gating. */
+  vadModelPath?: string | null
 }
 
 /**
@@ -134,8 +136,10 @@ async function transcribeWholeFile(
     // a concurrently running live session, not thread starvation.
     '-t', String(Math.max(2, cpus().length - 2)),
     '-bs', '3',
+    '-sns',
     '--no-prints'
   ]
+  if (opts.vadModelPath) args.push('--vad', '-vm', opts.vadModelPath)
 
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(opts.binPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })

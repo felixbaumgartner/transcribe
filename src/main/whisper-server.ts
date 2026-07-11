@@ -54,7 +54,8 @@ export class WhisperServerManager {
   constructor(
     private readonly binPath: string,
     private readonly modelPath: string,
-    private readonly threads: number
+    private readonly threads: number,
+    private readonly vadModelPath: string | null
   ) {}
 
   /** False once the server has repeatedly failed to start — callers should use the CLI. */
@@ -139,12 +140,15 @@ export class WhisperServerManager {
 
   private async start(): Promise<void> {
     const port = await freePort()
-    const proc = spawn(
-      this.binPath,
-      // audio_ctx is passed per request, scaled to each chunk's length.
-      ['-m', this.modelPath, '--host', '127.0.0.1', '--port', String(port), '-t', String(this.threads)],
-      { stdio: ['ignore', 'ignore', 'pipe'] }
-    )
+    // audio_ctx is passed per request, scaled to each chunk's length.
+    const args = ['-m', this.modelPath, '--host', '127.0.0.1', '--port', String(port), '-t', String(this.threads)]
+    // Suppress non-speech token output ("(keyboard clacking)" etc.).
+    args.push('-sns')
+    if (this.vadModelPath) {
+      // Silero VAD gates the decoder: non-speech audio produces no text at all.
+      args.push('--vad', '-vm', this.vadModelPath)
+    }
+    const proc = spawn(this.binPath, args, { stdio: ['ignore', 'ignore', 'pipe'] })
 
     let stderr = ''
     proc.stderr?.on('data', (d) => {

@@ -6,7 +6,7 @@ import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Segment, Speaker, TranscribeChunkResult } from '../shared/transcript.js'
 import { WhisperServerManager } from './whisper-server.js'
-import { modelName, modelPath } from './model.js'
+import { ensureVadModel, modelName, modelPath } from './model.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -109,6 +109,8 @@ export class TranscribeWorker {
   // Lazily created on the first chunk (needs the model path to be final by then).
   // null = server binary not installed; the CLI path is used instead.
   private server: WhisperServerManager | null | undefined
+  // Path to the Silero VAD model once ensured; null when unavailable.
+  private vadModel: string | null = null
 
   dispose(): void {
     this.server?.dispose()
@@ -195,8 +197,11 @@ export class TranscribeWorker {
 
   private async getServer(model: string): Promise<WhisperServerManager | null> {
     if (this.server !== undefined) return this.server
+    // Best-effort ~1 MB download on first use; null (offline) just means no VAD
+    // gating. Ensured here so the CLI-only path gets it too.
+    this.vadModel = await ensureVadModel()
     this.server = (await fileExists(whisperServerPath()))
-      ? new WhisperServerManager(whisperServerPath(), model, whisperThreads())
+      ? new WhisperServerManager(whisperServerPath(), model, whisperThreads(), this.vadModel)
       : null
     return this.server
   }
@@ -251,7 +256,7 @@ export class TranscribeWorker {
         return segments
           // Whisper marks segments it is confident contain no speech; those are
           // near-certain hallucinations (breathing, keyboard noise, music).
-          .filter((s) => (s.no_speech_prob ?? 0) < 0.85)
+          .filter((s) => (s.no_speech_prob ?? 0) < 0.75)
           // A segment starting at/after the chunk's real end is decoded from pure
           // padding — always hallucination.
           .filter((s) => s.start < chunkSeconds - 0.05)
@@ -297,9 +302,11 @@ export class TranscribeWorker {
           '-ac', String(audioCtx),
           '-bs', '2',
           '--no-fallback',
+          '-sns',
           '--no-prints'
         ]
         if (prompt) args.push('--prompt', prompt)
+        if (this.vadModel) args.push('--vad', '-vm', this.vadModel)
         const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
         const timeoutMs = whisperTimeoutMs()
         const timeout = setTimeout(() => {

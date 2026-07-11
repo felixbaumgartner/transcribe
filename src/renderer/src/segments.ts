@@ -83,12 +83,14 @@ function wordList(text: string): string[] {
 
 /**
  * Collapse decoder repetition loops ("first, first, first, first...") down to a
- * single occurrence. Runs per word-group size 1-3; only collapses 3+ repeats so
- * legitimate doubles ("yes, yes") survive.
+ * single occurrence. Short groups (1-3 words) need 3+ repeats so legitimate
+ * doubles ("yes, yes") survive; longer groups (4+ words) collapse at 2 repeats —
+ * nobody dictates a 4-word phrase back-to-back, but whisper stutters them.
  */
 export function collapseRepeats(text: string): string {
   const tokens = text.trim().split(/\s+/)
-  for (let size = 1; size <= 3; size++) {
+  for (let size = 1; size <= 6; size++) {
+    const minRepeats = size >= 4 ? 2 : 3
     const out: string[] = []
     let i = 0
     while (i < tokens.length) {
@@ -105,7 +107,7 @@ export function collapseRepeats(text: string): string {
         repeats += 1
       }
       out.push(...group)
-      i += repeats >= 3 ? repeats * size : size
+      i += repeats >= minRepeats ? repeats * size : size
     }
     tokens.length = 0
     tokens.push(...out)

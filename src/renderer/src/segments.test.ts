@@ -192,3 +192,12 @@ test('mergeSegments keeps a short genuine reply that is not near the previous se
 
   assert.equal(merged.length, 2)
 })
+
+test('collapseRepeats collapses long phrases repeated twice', () => {
+  assert.equal(
+    collapseRepeats('First, let us look at ... First, let us look at ... Today.'),
+    'First, let us look at ... Today.'
+  )
+  // Short doubles still survive
+  assert.equal(collapseRepeats('no, no'), 'no, no')
+})

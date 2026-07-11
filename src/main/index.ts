@@ -11,7 +11,7 @@ import {
   transcriptsDir
 } from './storage.js'
 import { TranscribeWorker, whisperBinaryPath } from './transcribe-worker.js'
-import { downloadModel, modelPath } from './model.js'
+import { downloadModel, ensureVadModel, modelPath } from './model.js'
 import { SessionAudioStore, refineSession } from './refine.js'
 import { transcriptFileName } from './transcript-render.js'
 import {
@@ -179,7 +179,8 @@ app.whenReady().then(() => {
             sessionDir: join(app.getPath('userData'), 'sessions', stem),
             binPath: whisperBinaryPath(),
             modelPath: modelPath(),
-            sampleRate: 16000
+            sampleRate: 16000,
+            vadModelPath: await ensureVadModel()
           },
           async (segments) => {
             await writeMarkdownTranscript(startedAt, segments)

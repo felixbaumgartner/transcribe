@@ -64,3 +64,17 @@ const reportingStream = new ReadableStream({
 await pipeline(Readable.fromWeb(reportingStream), createWriteStream(target))
 process.stdout.write('\n')
 console.log(`✓ Saved ${target}`)
+
+// Silero VAD model (~1 MB): gates the decoder so non-speech audio (keyboard,
+// breathing, music) is never transcribed. The app also self-downloads this.
+const vadFile = 'ggml-silero-v5.1.2.bin'
+const vadTarget = join(modelsDir, vadFile)
+if (!existsSync(vadTarget)) {
+  const vadRes = await fetch(`https://huggingface.co/ggml-org/whisper-vad/resolve/main/${vadFile}`, { redirect: 'follow' })
+  if (vadRes.ok) {
+    await pipeline(Readable.fromWeb(vadRes.body), createWriteStream(vadTarget))
+    console.log(`✓ Saved ${vadTarget}`)
+  } else {
+    console.warn(`⚠ VAD model download failed (${vadRes.status}) — the app will retry on first recording`)
+  }
+}

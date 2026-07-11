@@ -23,9 +23,10 @@ const api = {
     id: number,
     pcm: ArrayBuffer,
     sampleRate: number,
-    source: Speaker
+    source: Speaker,
+    prompt?: string
   ): Promise<TranscribeChunkResult> {
-    return ipcRenderer.invoke('transcribe:chunk', { id, pcm, sampleRate, source })
+    return ipcRenderer.invoke('transcribe:chunk', { id, pcm, sampleRate, source, prompt })
   },
   saveTranscript(startedAt: string, segments: Segment[]): Promise<string> {
     return ipcRenderer.invoke('storage:save', { startedAt, segments })

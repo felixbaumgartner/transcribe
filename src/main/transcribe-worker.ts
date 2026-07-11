@@ -137,7 +137,8 @@ export class TranscribeWorker {
     id: number,
     pcm: Buffer,
     sampleRate: number,
-    source: Speaker
+    source: Speaker,
+    prompt?: string
   ): Promise<TranscribeChunkResult> {
     if (this.queuedChunks[source] >= MAX_QUEUED_CHUNKS_PER_SOURCE) {
       return Promise.reject(
@@ -148,7 +149,7 @@ export class TranscribeWorker {
     }
 
     this.queuedChunks[source] += 1
-    const next = this.chains[source].then(() => this.runWithLock(id, pcm, sampleRate, source))
+    const next = this.chains[source].then(() => this.runWithLock(id, pcm, sampleRate, source, prompt))
     // Swallow rejection so a single bad chunk doesn't poison the queue.
     this.chains[source] = next.catch(() => [] as Segment[])
     return next
@@ -163,7 +164,8 @@ export class TranscribeWorker {
     id: number,
     pcm: Buffer,
     sampleRate: number,
-    source: Speaker
+    source: Speaker,
+    prompt?: string
   ): Promise<Segment[]> {
     const wait = this.inflight
     let release: () => void = () => {}
@@ -177,7 +179,7 @@ export class TranscribeWorker {
       // Previous inflight rejection shouldn't block us.
     }
     try {
-      return await this.runOnce(id, pcm, sampleRate, source)
+      return await this.runOnce(id, pcm, sampleRate, source, prompt)
     } finally {
       release()
     }
@@ -195,7 +197,8 @@ export class TranscribeWorker {
     id: number,
     pcm: Buffer,
     sampleRate: number,
-    source: Speaker
+    source: Speaker,
+    prompt?: string
   ): Promise<Segment[]> {
     const bin = whisperBinaryPath()
     const model = modelPath()
@@ -215,7 +218,7 @@ export class TranscribeWorker {
     const server = await this.getServer(model)
     if (server?.available) {
       try {
-        const segments = await server.transcribe(pcmToWav(pcm, sampleRate), whisperTimeoutMs())
+        const segments = await server.transcribe(pcmToWav(pcm, sampleRate), whisperTimeoutMs(), prompt)
         return segments
           // Whisper marks segments it is confident contain no speech; those are
           // near-certain hallucinations (breathing, keyboard noise, music).
@@ -253,6 +256,7 @@ export class TranscribeWorker {
           '-ac', String(AUDIO_CTX),
           '--no-prints'
         ]
+        if (prompt) args.push('--prompt', prompt)
         const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
         const timeoutMs = whisperTimeoutMs()
         const timeout = setTimeout(() => {

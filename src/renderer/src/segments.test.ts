@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { isHallucination, mergeSegments } from './segments.ts'
+import { buildPrompt, isHallucination, mergeSegments } from './segments.ts'
 
 test('mergeSegments removes overlapping duplicate text', () => {
   const merged = mergeSegments(
@@ -121,4 +121,31 @@ test('mergeSegments drops hallucinated segments', () => {
   )
 
   assert.deepEqual(merged.map((s) => s.text), ['real speech', 'more real speech'])
+})
+
+test('buildPrompt returns empty string with no history', () => {
+  assert.equal(buildPrompt([]), '')
+})
+
+test('buildPrompt joins recent segments in order', () => {
+  const prompt = buildPrompt([
+    { t0: 0, t1: 2, text: ' Hello there. ' },
+    { t0: 2, t1: 4, text: 'How are you?' }
+  ])
+
+  assert.equal(prompt, 'Hello there. How are you?')
+})
+
+test('buildPrompt caps length at a word boundary', () => {
+  const segments = Array.from({ length: 100 }, (_, i) => ({
+    t0: i,
+    t1: i + 1,
+    text: `word${i} is here`
+  }))
+  const prompt = buildPrompt(segments)
+
+  assert.ok(prompt.length <= 500)
+  assert.ok(!prompt.startsWith(' '))
+  // Ends with the most recent text
+  assert.ok(prompt.endsWith('word99 is here'))
 })

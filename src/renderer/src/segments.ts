@@ -50,6 +50,29 @@ function normalizeText(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
+// Whisper decodes noticeably better (punctuation, casing, word choice) when
+// conditioned on the preceding conversation. Cap the prompt so a long meeting
+// doesn't blow up request size — and so one bad segment ages out quickly.
+const MAX_PROMPT_CHARS = 500
+
+/**
+ * Build a whisper `prompt` from the transcript so far: the last ~500 characters
+ * of merged text, cut at a word boundary. Returns '' when there's no history.
+ * Built from post-filter segments, so hallucinations don't self-reinforce.
+ */
+export function buildPrompt(segments: Segment[]): string {
+  if (segments.length === 0) return ''
+  let text = ''
+  for (let i = segments.length - 1; i >= 0 && text.length < MAX_PROMPT_CHARS; i--) {
+    text = `${segments[i].text.trim()} ${text}`
+  }
+  text = text.trim().replace(/\s+/g, ' ')
+  if (text.length <= MAX_PROMPT_CHARS) return text
+  const cut = text.slice(-MAX_PROMPT_CHARS)
+  const firstSpace = cut.indexOf(' ')
+  return firstSpace === -1 ? cut : cut.slice(firstSpace + 1)
+}
+
 // Whisper hallucinates stock phrases on silence/noise — YouTube-outro lines it
 // learned from training data, and bracketed sound annotations. Only segments
 // consisting ENTIRELY of such content are dropped; the phrases inside real

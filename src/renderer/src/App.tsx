@@ -3,7 +3,7 @@ import { Recorder } from './components/Recorder'
 import { LiveTranscript } from './components/LiveTranscript'
 import { History } from './components/History'
 import { startCapture, type CaptureHandle, type ChunkMessage } from './audio-capture'
-import { mergeSegments } from './segments'
+import { buildPrompt, mergeSegments } from './segments'
 import type { Segment, TranscriptListItem, WorkerStatus, QueuedChunks } from '../../preload/index'
 
 type View = 'live' | 'history'
@@ -25,13 +25,6 @@ export function App(): JSX.Element {
   const pendingChunksRef = useRef<QueuedChunks>({ ...EMPTY_PENDING })
   const sessionIdRef = useRef(0)
   const autosaveTimerRef = useRef<number | null>(null)
-
-  // Stable elapsed-seconds offset per chunk so segment timestamps line up across chunks.
-  // Keyed by `${source}-${id}` because each source has its own chunk counter.
-  const chunkOffsetRef = useRef<Record<string, number>>({})
-  // Effective new audio per chunk = chunkSeconds - overlapSeconds. Source of truth lives
-  // in audio-capture.ts; we mirror it here once at start.
-  const chunkStrideRef = useRef(3)
 
   const refreshHistory = useCallback(async () => {
     setHistory(await window.api.listTranscripts())
@@ -61,21 +54,24 @@ export function App(): JSX.Element {
 
   const handleChunk = useCallback(async (chunk: ChunkMessage, sessionId: number) => {
     if (sessionId !== sessionIdRef.current) return
-    const key = `${chunk.source}-${chunk.id}`
     pendingChunksRef.current = {
       ...pendingChunksRef.current,
       [chunk.source]: pendingChunksRef.current[chunk.source] + 1
     }
     setPendingChunks((p) => ({ ...p, [chunk.source]: p[chunk.source] + 1 }))
-    chunkOffsetRef.current[key] = chunk.id * chunkStrideRef.current
     try {
       const { segments: segs } = await window.api.transcribeChunk(
         chunk.id,
         chunk.pcm,
         chunk.sampleRate,
-        chunk.source
+        chunk.source,
+        // Condition whisper on the conversation so far — better punctuation,
+        // casing, and boundary words than decoding each chunk blind.
+        buildPrompt(segmentsRef.current)
       )
-      const offset = chunkOffsetRef.current[key] ?? 0
+      // Chunks are variable-length (cut at silence), so alignment uses the
+      // chunk's absolute start time rather than id arithmetic.
+      const offset = chunk.startSeconds
       const adjusted = segs.map((s) => ({
         ...s,
         t0: s.t0 + offset,
@@ -105,7 +101,6 @@ export function App(): JSX.Element {
     setSegments([])
     setPendingChunks(EMPTY_PENDING)
     pendingChunksRef.current = { ...EMPTY_PENDING }
-    chunkOffsetRef.current = {}
 
     // Verify whisper assets exist before we start capturing — easier to surface the issue
     const s = await window.api.workerStatus()
@@ -126,7 +121,6 @@ export function App(): JSX.Element {
         return
       }
       captureRef.current = handle
-      chunkStrideRef.current = handle.chunkSeconds - handle.overlapSeconds
       setMicAvailable(handle.micAvailable)
       setRecording(true)
     } catch (err: unknown) {

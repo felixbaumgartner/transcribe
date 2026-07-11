@@ -42,3 +42,24 @@ test('validateTranscribeChunkPayload rejects invalid sources', () => {
     /Invalid source/
   )
 })
+
+test('validateTranscribeChunkPayload accepts and caps prompt', () => {
+  const payload = validateTranscribeChunkPayload({
+    id: 1,
+    pcm: new ArrayBuffer(4),
+    sampleRate: 16000,
+    source: 'you',
+    prompt: 'x'.repeat(5000)
+  })
+  assert.equal(payload.prompt?.length, 2000)
+
+  assert.throws(() =>
+    validateTranscribeChunkPayload({
+      id: 1,
+      pcm: new ArrayBuffer(4),
+      sampleRate: 16000,
+      source: 'you',
+      prompt: 42
+    })
+  )
+})

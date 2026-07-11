@@ -99,7 +99,13 @@ app.whenReady().then(() => {
 
   ipcMain.handle('transcribe:chunk', async (_evt, rawPayload: unknown) => {
     const payload = validateTranscribeChunkPayload(rawPayload)
-    return await worker!.transcribeChunk(payload.id, Buffer.from(payload.pcm), payload.sampleRate, payload.source)
+    return await worker!.transcribeChunk(
+      payload.id,
+      Buffer.from(payload.pcm),
+      payload.sampleRate,
+      payload.source,
+      payload.prompt
+    )
   })
 
   ipcMain.handle('storage:save', async (_evt, rawPayload: unknown) => {

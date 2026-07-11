@@ -6,8 +6,9 @@
 // 4. Each source feeds its OWN AudioWorklet (tagged 'others' for system, 'you' for mic),
 //    so each stream is chunked and transcribed independently — that's what powers
 //    speaker labels downstream without needing a diarization model.
-// 5. Each worklet emits Int16 PCM chunks (4s with 1s overlap by default), tagged with
-//    its source, which the main process routes into per-source whisper.cpp queues.
+// 5. Each worklet emits Int16 PCM chunks cut at speech boundaries (VAD endpointing,
+//    max 4s), tagged with its source and absolute start time, which the main process
+//    routes into per-source whisper.cpp queues.
 //
 // Why 16 kHz: whisper.cpp consumes 16 kHz mono PCM. Constructing the AudioContext
 // at this rate makes the browser do the resampling for us — simpler than rolling our own.
@@ -15,19 +16,14 @@
 import workletUrl from './audio-worklet.ts?worker&url'
 import type { Speaker } from '../../preload/index'
 
-// 4s chunks: with the resident server + capped audio context a chunk transcribes
-// in well under real time, so smaller chunks are pure latency win. Don't go much
-// lower — whisper hallucinates more on very short clips, and the 1s overlap
-// becomes a bigger fraction of redundant compute.
-const CHUNK_SECONDS = 4
-const OVERLAP_SECONDS = 1
+// Hard cap on chunk length during continuous speech. Utterances shorter than this
+// are cut earlier, at silence boundaries (see audio-worklet.ts).
+const MAX_CHUNK_SECONDS = 4
 
 export interface CaptureHandle {
   stop(): Promise<void>
   startedAt: Date
   micAvailable: boolean
-  chunkSeconds: number
-  overlapSeconds: number
 }
 
 export interface ChunkMessage {
@@ -35,6 +31,8 @@ export interface ChunkMessage {
   pcm: ArrayBuffer
   sampleRate: number
   source: Speaker
+  /** Absolute position of this chunk's first sample within the capture. */
+  startSeconds: number
 }
 
 interface SourceWorklet {
@@ -86,8 +84,7 @@ export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<
       channelInterpretation: 'speakers',
       processorOptions: {
         source,
-        chunkSeconds: CHUNK_SECONDS,
-        overlapSeconds: OVERLAP_SECONDS
+        maxChunkSeconds: MAX_CHUNK_SECONDS
       }
     })
     let resolveFlushed: () => void = () => {}
@@ -105,7 +102,8 @@ export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<
         id: msg.id,
         pcm: msg.pcm,
         sampleRate: msg.sampleRate,
-        source: msg.source ?? source
+        source: msg.source ?? source,
+        startSeconds: msg.startSeconds ?? 0
       })
     }
     src.connect(node)
@@ -136,8 +134,6 @@ export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<
   return {
     startedAt,
     micAvailable,
-    chunkSeconds: CHUNK_SECONDS,
-    overlapSeconds: OVERLAP_SECONDS,
     async stop() {
       // Ask all worklets to flush whatever's left in their buffers (the last tail of audio)
       // before tearing down, otherwise the tail of the recording is silently discarded.

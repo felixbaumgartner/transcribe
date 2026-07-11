@@ -46,7 +46,13 @@ export interface TranscribeChunkPayload {
   pcm: ArrayBuffer
   sampleRate: number
   source: Speaker
+  /** Preceding transcript text used to condition the decoder. */
+  prompt?: string
 }
+
+// Hard ceiling on conditioning text accepted over IPC; the renderer normally
+// sends ~500 chars.
+const MAX_PROMPT_LENGTH = 2000
 
 export interface SaveTranscriptPayload {
   startedAt: string
@@ -89,12 +95,14 @@ export function validateSaveTranscriptPayload(value: unknown): SaveTranscriptPay
 
 export function validateTranscribeChunkPayload(value: unknown): TranscribeChunkPayload {
   if (!isRecord(value)) throw new Error('Invalid chunk payload')
-  const { id, pcm, sampleRate, source } = value
+  const { id, pcm, sampleRate, source, prompt } = value
   if (typeof id !== 'number' || !Number.isInteger(id) || id < 0) throw new Error('Invalid chunk id')
   if (!(pcm instanceof ArrayBuffer)) throw new Error('Invalid chunk payload')
   if (typeof sampleRate !== 'number' || !Number.isFinite(sampleRate) || sampleRate <= 0) throw new Error('Invalid sample rate')
   if (!isSpeaker(source)) throw new Error('Invalid source')
-  return { id, pcm, sampleRate, source }
+  if (prompt !== undefined && typeof prompt !== 'string') throw new Error('Invalid prompt')
+  const trimmedPrompt = prompt ? prompt.slice(-MAX_PROMPT_LENGTH) : undefined
+  return { id, pcm, sampleRate, source, ...(trimmedPrompt ? { prompt: trimmedPrompt } : {}) }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

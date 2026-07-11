@@ -66,12 +66,13 @@ export class WhisperServerManager {
     return this.proc !== null && this.proc.exitCode === null
   }
 
-  async transcribe(wav: Buffer, timeoutMs: number): Promise<ServerSegment[]> {
+  async transcribe(wav: Buffer, timeoutMs: number, prompt?: string): Promise<ServerSegment[]> {
     await this.ensureStarted()
     const form = new FormData()
     form.append('file', new Blob([new Uint8Array(wav)], { type: 'audio/wav' }), 'chunk.wav')
     form.append('response_format', 'verbose_json')
     form.append('temperature', '0.0')
+    if (prompt) form.append('prompt', prompt)
     const res = await fetch(`http://127.0.0.1:${this.port}/inference`, {
       method: 'POST',
       body: form,

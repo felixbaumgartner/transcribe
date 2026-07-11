@@ -144,7 +144,7 @@ test('buildPrompt caps length at a word boundary', () => {
   }))
   const prompt = buildPrompt(segments)
 
-  assert.ok(prompt.length <= 500)
+  assert.ok(prompt.length <= 200)
   assert.ok(!prompt.startsWith(' '))
   // Ends with the most recent text
   assert.ok(prompt.endsWith('word99 is here'))

@@ -295,6 +295,7 @@ export class TranscribeWorker {
           '-l', 'en',
           '-t', String(whisperThreads()),
           '-ac', String(audioCtx),
+          '-bs', '2',
           '--no-fallback',
           '--no-prints'
         ]

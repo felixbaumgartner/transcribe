@@ -118,9 +118,12 @@ function normalizeText(text: string): string {
 }
 
 // Whisper decodes noticeably better (punctuation, casing, word choice) when
-// conditioned on the preceding conversation. Cap the prompt so a long meeting
-// doesn't blow up request size — and so one bad segment ages out quickly.
-const MAX_PROMPT_CHARS = 500
+// conditioned on the preceding conversation — but the prompt is also raw
+// material for hallucination: on a fragment ending mid-phrase the decoder
+// sometimes "completes" it with words lifted from the prompt. 200 chars keeps
+// the continuity benefit while limiting what it can inject, and ages a bad
+// segment out of context quickly.
+const MAX_PROMPT_CHARS = 200
 
 /**
  * Build a whisper `prompt` from the transcript so far: the last ~500 characters

@@ -90,6 +90,9 @@ export class WhisperServerManager {
     // decode passes) measured 21s for a 2.3s chunk — it stalls the whole queue
     // and the retried output is no better for live captioning.
     form.append('temperature_inc', '0')
+    // Beam search over 2 hypotheses: better word choice and fewer repetition
+    // traps than greedy, at ~the same cost (greedy already runs best_of=2).
+    form.append('beam_size', '2')
     if (prompt) form.append('prompt', prompt)
     if (audioCtx) form.append('audio_ctx', String(audioCtx))
     const res = await fetch(`http://127.0.0.1:${this.port}/inference`, {

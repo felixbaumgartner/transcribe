@@ -49,30 +49,45 @@ export class WhisperServerManager {
   private port = 0
   private starting: Promise<void> | null = null
   private consecutiveStartFailures = 0
+  private isDisposed = false
 
   constructor(
     private readonly binPath: string,
     private readonly modelPath: string,
-    private readonly threads: number,
-    private readonly audioCtx: number
+    private readonly threads: number
   ) {}
 
   /** False once the server has repeatedly failed to start — callers should use the CLI. */
   get available(): boolean {
-    return this.consecutiveStartFailures < MAX_CONSECUTIVE_START_FAILURES
+    return !this.isDisposed && this.consecutiveStartFailures < MAX_CONSECUTIVE_START_FAILURES
+  }
+
+  get disposed(): boolean {
+    return this.isDisposed
+  }
+
+  /** Start the server (loading the model) ahead of the first chunk. */
+  warmup(): Promise<void> {
+    return this.ensureStarted()
   }
 
   get running(): boolean {
     return this.proc !== null && this.proc.exitCode === null
   }
 
-  async transcribe(wav: Buffer, timeoutMs: number, prompt?: string): Promise<ServerSegment[]> {
+  async transcribe(
+    wav: Buffer,
+    timeoutMs: number,
+    prompt?: string,
+    audioCtx?: number
+  ): Promise<ServerSegment[]> {
     await this.ensureStarted()
     const form = new FormData()
     form.append('file', new Blob([new Uint8Array(wav)], { type: 'audio/wav' }), 'chunk.wav')
     form.append('response_format', 'verbose_json')
     form.append('temperature', '0.0')
     if (prompt) form.append('prompt', prompt)
+    if (audioCtx) form.append('audio_ctx', String(audioCtx))
     const res = await fetch(`http://127.0.0.1:${this.port}/inference`, {
       method: 'POST',
       body: form,
@@ -87,6 +102,7 @@ export class WhisperServerManager {
   }
 
   dispose(): void {
+    this.isDisposed = true
     if (this.proc && this.proc.exitCode === null) {
       this.proc.kill()
     }
@@ -118,13 +134,8 @@ export class WhisperServerManager {
     const port = await freePort()
     const proc = spawn(
       this.binPath,
-      [
-        '-m', this.modelPath,
-        '--host', '127.0.0.1',
-        '--port', String(port),
-        '-t', String(this.threads),
-        '-ac', String(this.audioCtx)
-      ],
+      // audio_ctx is passed per request, scaled to each chunk's length.
+      ['-m', this.modelPath, '--host', '127.0.0.1', '--port', String(port), '-t', String(this.threads)],
       { stdio: ['ignore', 'ignore', 'pipe'] }
     )
 

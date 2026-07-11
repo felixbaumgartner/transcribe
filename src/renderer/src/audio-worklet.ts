@@ -21,8 +21,11 @@
 const SPEECH_RMS = 0.002
 // An utterance is considered finished after this much continuous silence.
 const SILENCE_HOLD_SECONDS = 0.4
-// Don't emit a chunk shorter than this on a silence cut (whisper hallucinates on blips).
-const MIN_CHUNK_SECONDS = 1
+// Don't emit a chunk shorter than this on a silence cut. Two constraints: whisper
+// hallucinates on sub-second blips, and each chunk carries fixed decode overhead,
+// so this floor also caps the chunk rate at one per ~2.2s (min + silence hold) —
+// below the ~1-1.5s it takes to transcribe a short chunk.
+const MIN_CHUNK_SECONDS = 1.75
 // Overlap tail kept only when a forced (mid-speech) cut happens.
 const FORCED_OVERLAP_SECONDS = 0.5
 // Whisper produces nothing useful from clips shorter than this.

@@ -46,6 +46,9 @@ const api = {
   workerStatus(): Promise<WorkerStatus> {
     return ipcRenderer.invoke('worker:status')
   },
+  warmupWhisper(): Promise<void> {
+    return ipcRenderer.invoke('worker:warmup')
+  },
   downloadModel(): Promise<string> {
     return ipcRenderer.invoke('model:download')
   },

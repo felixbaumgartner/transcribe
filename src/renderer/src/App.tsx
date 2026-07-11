@@ -80,6 +80,8 @@ export function App(): JSX.Element {
       }))
       if (sessionId !== sessionIdRef.current) return
       setSegments((prev) => mergeSegments(prev, adjusted))
+      // A backlog warning is transient — clear it once chunks flow again.
+      setError((prev) => (prev && prev.includes('falling behind') ? null : prev))
     } catch (err: unknown) {
       if (sessionId !== sessionIdRef.current) return
       const msg = err instanceof Error ? err.message : String(err)
@@ -113,6 +115,10 @@ export function App(): JSX.Element {
       setError(`Model not found. Use the "Download model" button to fetch it.\n\nExpected at: ${s.modelPath}`)
       return
     }
+
+    // Start loading the model now, while the user is in the screen picker —
+    // otherwise the first ~10-15s of speech queues up behind the model load.
+    window.api.warmupWhisper().catch(() => {})
 
     try {
       const handle = await startCapture((chunk) => handleChunk(chunk, sessionId))

@@ -127,6 +127,12 @@ app.whenReady().then(() => {
 
   ipcMain.handle('worker:status', async () => worker!.status())
 
+  // Fire-and-forget: kick off the whisper-server model load when recording
+  // starts so the first chunks don't queue behind it.
+  ipcMain.handle('worker:warmup', async () => {
+    void worker!.warmup()
+  })
+
   ipcMain.handle('model:download', async () => {
     return await downloadModel((p) => {
       mainWindow?.webContents.send('model:download-progress', p)

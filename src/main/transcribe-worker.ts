@@ -20,10 +20,18 @@ const MAX_QUEUED_CHUNKS_PER_SOURCE = 10
 const DEFAULT_WHISPER_TIMEOUT_MS = 120000
 
 // Whisper pads every input to a 30s window and runs the encoder over ALL of it —
-// for short live chunks most of that work is spent encoding padding. Capping the
-// audio context to 512 frames (≈10.2s of audio, comfortably above our ≤4s chunks)
-// measured ~3x faster per chunk on CPU with identical transcription output.
-const AUDIO_CTX = 512
+// for short live chunks most of that work is spent encoding padding. Scaling the
+// audio context to each chunk's actual length (50 frames/second + headroom)
+// measured 2-3x faster per chunk on CPU with identical transcription output,
+// and keeps short endpointed chunks cheap enough that the queue can always
+// drain faster than speech arrives.
+const MIN_AUDIO_CTX = 128
+const MAX_AUDIO_CTX = 512
+
+function audioCtxForSeconds(seconds: number): number {
+  const frames = Math.ceil(seconds * 50) + 32
+  return Math.min(MAX_AUDIO_CTX, Math.max(MIN_AUDIO_CTX, frames))
+}
 
 function whisperBinDir(): string {
   // In dev: resources/ sits next to the project root.
@@ -188,9 +196,22 @@ export class TranscribeWorker {
   private async getServer(model: string): Promise<WhisperServerManager | null> {
     if (this.server !== undefined) return this.server
     this.server = (await fileExists(whisperServerPath()))
-      ? new WhisperServerManager(whisperServerPath(), model, whisperThreads(), AUDIO_CTX)
+      ? new WhisperServerManager(whisperServerPath(), model, whisperThreads())
       : null
     return this.server
+  }
+
+  /**
+   * Start loading the model before the first chunk arrives (call when recording
+   * starts). Without this the first ~10-15s of speech piles up behind the load.
+   */
+  async warmup(): Promise<void> {
+    const model = modelPath()
+    if (!(await fileExists(model))) return
+    const server = await this.getServer(model)
+    if (server?.available) {
+      await server.warmup().catch(() => {}) // failures latch inside the manager
+    }
   }
 
   private async runOnce(
@@ -214,17 +235,27 @@ export class TranscribeWorker {
       throw new Error(`model missing at ${model} — run "npm run fetch-model"`)
     }
 
+    const chunkSeconds = pcm.length / 2 / sampleRate
+    const audioCtx = audioCtxForSeconds(chunkSeconds)
+
     // Preferred path: resident whisper-server (model stays loaded across chunks).
     const server = await this.getServer(model)
     if (server?.available) {
       try {
-        const segments = await server.transcribe(pcmToWav(pcm, sampleRate), whisperTimeoutMs(), prompt)
+        const segments = await server.transcribe(
+          pcmToWav(pcm, sampleRate),
+          whisperTimeoutMs(),
+          prompt,
+          audioCtx
+        )
         return segments
           // Whisper marks segments it is confident contain no speech; those are
           // near-certain hallucinations (breathing, keyboard noise, music).
           .filter((s) => (s.no_speech_prob ?? 0) < 0.85)
           .map((s) => ({ t0: s.start, t1: s.end, text: s.text, speaker: source }))
       } catch (err) {
+        // App is quitting — don't burn CPU on a CLI fallback for a dead session.
+        if (server.disposed) throw err
         // Server hiccup (crash, timeout, port clash) — fall back to the CLI for
         // this chunk. The next chunk retries the server; after repeated start
         // failures `available` latches false and we stop trying.
@@ -253,7 +284,7 @@ export class TranscribeWorker {
           '-of', wavPath, // output file prefix (whisper appends .json)
           '-l', 'en',
           '-t', String(whisperThreads()),
-          '-ac', String(AUDIO_CTX),
+          '-ac', String(audioCtx),
           '--no-prints'
         ]
         if (prompt) args.push('--prompt', prompt)

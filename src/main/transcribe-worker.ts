@@ -252,7 +252,17 @@ export class TranscribeWorker {
           // Whisper marks segments it is confident contain no speech; those are
           // near-certain hallucinations (breathing, keyboard noise, music).
           .filter((s) => (s.no_speech_prob ?? 0) < 0.85)
-          .map((s) => ({ t0: s.start, t1: s.end, text: s.text, speaker: source }))
+          // A segment starting at/after the chunk's real end is decoded from pure
+          // padding — always hallucination.
+          .filter((s) => s.start < chunkSeconds - 0.05)
+          // Degenerate decodes report the full padded window (0-30s); clamp
+          // timestamps to the actual chunk so downstream alignment stays sane.
+          .map((s) => ({
+            t0: s.start,
+            t1: Math.max(s.start, Math.min(s.end, chunkSeconds)),
+            text: s.text,
+            speaker: source
+          }))
       } catch (err) {
         // App is quitting — don't burn CPU on a CLI fallback for a dead session.
         if (server.disposed) throw err
@@ -285,6 +295,7 @@ export class TranscribeWorker {
           '-l', 'en',
           '-t', String(whisperThreads()),
           '-ac', String(audioCtx),
+          '--no-fallback',
           '--no-prints'
         ]
         if (prompt) args.push('--prompt', prompt)

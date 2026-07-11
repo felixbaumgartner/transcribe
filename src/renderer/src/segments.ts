@@ -3,7 +3,8 @@ import type { Segment } from '../../preload/index'
 /**
  * Merge new segments from a chunk into the running list.
  *
- * Two dedup rules apply:
+ * Candidates are cleaned (repetition loops collapsed) and dropped when they are
+ * blank, known hallucinations, or duplicates under three rules:
  *
  * 1. **Same-source overlap** — consecutive chunks from the same source share an
  *    overlap window, so we drop a candidate when an existing tail segment of the
@@ -15,16 +16,23 @@ import type { Segment } from '../../preload/index'
  *    the 'others' copy: the mic is closer to the actual speaker than re-captured
  *    loopback. Known v1 limitation: only fires when the 'you' segment arrived
  *    first; reverse-order echoes slip through.
+ *
+ * 3. **Overlap-echo fragments** — see isOverlapEcho().
  */
 export function mergeSegments(prev: Segment[], next: Segment[]): Segment[] {
-  if (prev.length === 0) return next.filter((s) => normalizeText(s.text) && !isHallucination(s.text))
-  if (next.length === 0) return prev
-  const tail = prev.slice(-8)
-  const filtered = next.filter((candidate) => {
+  const cleaned = next.map((s) => ({ ...s, text: collapseRepeats(s.text) }))
+  if (cleaned.length === 0) return prev
+  // Candidates are compared against the recent tail AND against candidates
+  // already accepted from this same batch — whisper sometimes emits the same
+  // sentence twice within one chunk.
+  const accepted: Segment[] = []
+  for (const candidate of cleaned) {
     const candidateText = normalizeText(candidate.text)
-    if (!candidateText) return false
-    if (isHallucination(candidate.text)) return false
-    return !tail.some((existing) => {
+    if (!candidateText) continue
+    if (isHallucination(candidate.text)) continue
+    const against = [...prev.slice(-8), ...accepted]
+    if (isOverlapEcho(candidate, against)) continue
+    const duplicate = against.some((existing) => {
       if (normalizeText(existing.text) !== candidateText) return false
 
       // 1. Same-source overlap dedup
@@ -42,8 +50,67 @@ export function mergeSegments(prev: Segment[], next: Segment[]): Segment[] {
 
       return false
     })
+    if (!duplicate) accepted.push(candidate)
+  }
+  if (accepted.length === 0) return prev
+  return [...prev, ...accepted].sort((a, b) => a.t0 - b.t0)
+}
+
+/**
+ * Forced mid-speech cuts keep a small audio overlap so no word is lost, but
+ * whisper sometimes re-transcribes that overlap as its own fragment ("Last
+ * month" after "...dropped below 2% last month."). Drop a short candidate
+ * whose words are all contained in a time-adjacent same-source segment.
+ */
+function isOverlapEcho(candidate: Segment, tail: Segment[]): boolean {
+  const words = wordList(candidate.text)
+  if (words.length === 0 || words.length > 8) return false
+  return tail.some((existing) => {
+    if (existing.speaker !== candidate.speaker) return false
+    // Candidate must start inside (or just after) the existing segment's span.
+    if (candidate.t0 < existing.t0 - 0.25 || candidate.t0 > existing.t1 + 0.25) return false
+    const existingWords = new Set(wordList(existing.text))
+    return words.every((w) => existingWords.has(w))
   })
-  return [...prev, ...filtered].sort((a, b) => a.t0 - b.t0)
+}
+
+function wordList(text: string): string[] {
+  return normalizeText(text)
+    .replace(/[^\p{L}\p{N}\s']/gu, '')
+    .split(' ')
+    .filter(Boolean)
+}
+
+/**
+ * Collapse decoder repetition loops ("first, first, first, first...") down to a
+ * single occurrence. Runs per word-group size 1-3; only collapses 3+ repeats so
+ * legitimate doubles ("yes, yes") survive.
+ */
+export function collapseRepeats(text: string): string {
+  const tokens = text.trim().split(/\s+/)
+  for (let size = 1; size <= 3; size++) {
+    const out: string[] = []
+    let i = 0
+    while (i < tokens.length) {
+      const group = tokens.slice(i, i + size)
+      const norm = group.join(' ').toLowerCase().replace(/[.,!?]+$/, '')
+      let repeats = 1
+      while (i + (repeats + 1) * size <= tokens.length) {
+        const nextGroup = tokens
+          .slice(i + repeats * size, i + (repeats + 1) * size)
+          .join(' ')
+          .toLowerCase()
+          .replace(/[.,!?]+$/, '')
+        if (nextGroup !== norm) break
+        repeats += 1
+      }
+      out.push(...group)
+      i += repeats >= 3 ? repeats * size : size
+    }
+    tokens.length = 0
+    tokens.push(...out)
+  }
+  return tokens.join(' ')
 }
 
 function normalizeText(text: string): string {

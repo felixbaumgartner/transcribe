@@ -86,6 +86,10 @@ export class WhisperServerManager {
     form.append('file', new Blob([new Uint8Array(wav)], { type: 'audio/wav' }), 'chunk.wav')
     form.append('response_format', 'verbose_json')
     form.append('temperature', '0.0')
+    // No temperature fallback: on a hard chunk the retry ladder (up to 5 extra
+    // decode passes) measured 21s for a 2.3s chunk — it stalls the whole queue
+    // and the retried output is no better for live captioning.
+    form.append('temperature_inc', '0')
     if (prompt) form.append('prompt', prompt)
     if (audioCtx) form.append('audio_ctx', String(audioCtx))
     const res = await fetch(`http://127.0.0.1:${this.port}/inference`, {

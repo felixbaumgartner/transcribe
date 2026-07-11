@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildPrompt, isHallucination, mergeSegments } from './segments.ts'
+import { buildPrompt, collapseRepeats, isHallucination, mergeSegments } from './segments.ts'
 
 test('mergeSegments removes overlapping duplicate text', () => {
   const merged = mergeSegments(
@@ -148,4 +148,47 @@ test('buildPrompt caps length at a word boundary', () => {
   assert.ok(!prompt.startsWith(' '))
   // Ends with the most recent text
   assert.ok(prompt.endsWith('word99 is here'))
+})
+
+test('collapseRepeats collapses decoder repetition loops', () => {
+  assert.equal(
+    collapseRepeats('first, first, first, first, first, first,'),
+    'first,'
+  )
+  assert.equal(collapseRepeats('yes, yes'), 'yes, yes') // doubles survive
+  assert.equal(collapseRepeats('the numbers look good'), 'the numbers look good')
+  assert.equal(
+    collapseRepeats('go on go on go on go on please'),
+    'go on please'
+  )
+})
+
+test('mergeSegments drops overlap-echo fragments (words subset of adjacent segment)', () => {
+  const merged = mergeSegments(
+    [{ t0: 8.6, t1: 12.6, text: 'The churn rate dropped below 2% last month.', speaker: 'you' }],
+    [{ t0: 12.1, t1: 13.9, text: 'Last month', speaker: 'you' }]
+  )
+
+  assert.equal(merged.length, 1)
+})
+
+test('mergeSegments dedupes identical segments within one batch', () => {
+  const merged = mergeSegments(
+    [],
+    [
+      { t0: 12.5, t1: 13.5, text: 'We should look at the numbers.', speaker: 'you' },
+      { t0: 13.5, t1: 14.5, text: 'We should look at the numbers.', speaker: 'you' }
+    ]
+  )
+
+  assert.equal(merged.length, 1)
+})
+
+test('mergeSegments keeps a short genuine reply that is not near the previous segment', () => {
+  const merged = mergeSegments(
+    [{ t0: 0, t1: 3, text: 'Should we ship it last month or next month?', speaker: 'others' }],
+    [{ t0: 6, t1: 7, text: 'Next month.', speaker: 'you' }]
+  )
+
+  assert.equal(merged.length, 2)
 })

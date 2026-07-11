@@ -204,20 +204,35 @@ export function App(): JSX.Element {
 
   return (
     <div className="flex h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-5 py-3">
+      <header className="flex items-center justify-between border-b border-zinc-800/70 px-5 py-3">
         <div className="flex items-center gap-3">
-          <span className="text-base font-semibold tracking-tight">Transcribe</span>
-          <span className="text-xs text-zinc-500">Local · No cloud</span>
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-400 to-teal-600 shadow-lg shadow-emerald-950/50 ring-1 ring-white/10">
+            <LogoWave />
+          </div>
+          <div>
+            <div className="text-[15px] font-semibold leading-tight tracking-tight">Transcribe</div>
+            <div className="text-[11px] leading-tight text-zinc-500">
+              Local transcription — audio never leaves this machine
+            </div>
+          </div>
         </div>
-        <nav className="flex gap-1 rounded-md bg-zinc-900 p-1 text-xs">
+        <nav className="flex gap-1 rounded-full border border-zinc-800/80 bg-zinc-900/70 p-1 text-xs">
           <button
-            className={`rounded px-3 py-1 ${view === 'live' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+            className={`rounded-full px-4 py-1.5 font-medium transition-colors ${
+              view === 'live'
+                ? 'bg-zinc-800 text-white shadow-sm ring-1 ring-zinc-700'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
             onClick={() => { setView('live'); setViewingFile(null) }}
           >
             Live
           </button>
           <button
-            className={`rounded px-3 py-1 ${view === 'history' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
+            className={`rounded-full px-4 py-1.5 font-medium transition-colors ${
+              view === 'history'
+                ? 'bg-zinc-800 text-white shadow-sm ring-1 ring-zinc-700'
+                : 'text-zinc-400 hover:text-zinc-200'
+            }`}
             onClick={() => { setView('history'); refreshHistory() }}
           >
             History
@@ -226,14 +241,22 @@ export function App(): JSX.Element {
       </header>
 
       {error && (
-        <div className="border-b border-red-900/50 bg-red-950/40 px-5 py-3 text-sm text-red-200 whitespace-pre-wrap">
-          {error}
+        <div className="flex items-start gap-3 border-b border-rose-900/40 bg-rose-950/40 px-5 py-3 text-sm text-rose-200">
+          <AlertIcon />
+          <div className="flex-1 whitespace-pre-wrap">{error}</div>
+          <button
+            onClick={() => setError(null)}
+            aria-label="Dismiss error"
+            className="rounded p-0.5 text-rose-400 transition-colors hover:text-rose-100"
+          >
+            <CloseIcon />
+          </button>
         </div>
       )}
 
       {recording && !micAvailable && (
-        <div className="border-b border-amber-900/50 bg-amber-950/30 px-5 py-2 text-xs text-amber-200">
-          Mic denied — labeling everything as Others.
+        <div className="border-b border-amber-900/40 bg-amber-950/30 px-5 py-2 text-xs text-amber-200">
+          Microphone unavailable — everything will be labeled “Others”.
         </div>
       )}
 
@@ -264,5 +287,36 @@ export function App(): JSX.Element {
         />
       )}
     </div>
+  )
+}
+
+function LogoWave(): JSX.Element {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" aria-hidden>
+      <line x1="3" y1="7.5" x2="3" y2="10.5" />
+      <line x1="6" y1="5.5" x2="6" y2="12.5" />
+      <line x1="9" y1="3" x2="9" y2="15" />
+      <line x1="12" y1="5.5" x2="12" y2="12.5" />
+      <line x1="15" y1="7.5" x2="15" y2="10.5" />
+    </svg>
+  )
+}
+
+function AlertIcon(): JSX.Element {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 shrink-0 text-rose-400" aria-hidden>
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  )
+}
+
+function CloseIcon(): JSX.Element {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden>
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
   )
 }

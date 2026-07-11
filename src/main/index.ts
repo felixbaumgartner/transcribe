@@ -31,7 +31,7 @@ function createWindow(): void {
     minHeight: 560,
     show: false,
     autoHideMenuBar: true,
-    backgroundColor: '#0b0d12',
+    backgroundColor: '#0a0c11',
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       // sandbox must be false for ESM preload (.mjs with import statements) on

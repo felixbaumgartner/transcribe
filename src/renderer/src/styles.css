@@ -8,8 +8,62 @@ body {
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   user-select: none;
+  /* Soft emerald glow bleeding from the top — gives the flat dark canvas depth. */
+  background:
+    radial-gradient(1100px 480px at 50% -12%, rgb(16 185 129 / 0.08), transparent 60%),
+    #0a0c11;
 }
 
 .transcript-text, .transcript-text * {
   user-select: text;
+}
+
+/* --- Scrollbars ------------------------------------------------------- */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(63 63 70 / 0.55);
+  border-radius: 8px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(82 82 91 / 0.8);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+/* --- Motion ------------------------------------------------------------ */
+/* New transcript bubbles slide up as they arrive. */
+@keyframes seg-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.seg-enter {
+  animation: seg-enter 260ms ease-out both;
+}
+
+/* Equalizer bars shown while recording. Each bar gets its own delay/duration
+   inline so they never sync up. */
+@keyframes eq-bounce {
+  0%, 100% { transform: scaleY(0.25); }
+  50%      { transform: scaleY(1); }
+}
+.eq-bar {
+  transform-origin: bottom;
+  animation: eq-bounce 900ms ease-in-out infinite;
+}
+
+/* Slow breathing glow behind the idle record button. */
+@keyframes breathe {
+  0%, 100% { opacity: 0.45; transform: scale(1); }
+  50%      { opacity: 0.9;  transform: scale(1.12); }
+}
+.record-glow {
+  animation: breathe 3.2s ease-in-out infinite;
 }

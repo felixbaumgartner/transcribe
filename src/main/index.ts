@@ -10,11 +10,16 @@ import {
   readTranscript,
   transcriptsDir
 } from './storage.js'
-import { TranscribeWorker } from './transcribe-worker.js'
-import { downloadModel } from './model.js'
+import { TranscribeWorker, whisperBinaryPath } from './transcribe-worker.js'
+import { downloadModel, modelPath } from './model.js'
+import { SessionAudioStore, refineSession } from './refine.js'
+import { transcriptFileName } from './transcript-render.js'
 import {
   validateSaveTranscriptPayload,
-  validateTranscribeChunkPayload
+  validateSessionAudioPayload,
+  validateStartedAt,
+  validateTranscribeChunkPayload,
+  type RefineStatusEvent
 } from '../shared/transcript.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -137,6 +142,63 @@ app.whenReady().then(() => {
     return await downloadModel((p) => {
       mainWindow?.webContents.send('model:download-progress', p)
     })
+  })
+
+  // --- Post-meeting refinement: session audio spool + background re-pass ---
+  const sessions = new SessionAudioStore(join(app.getPath('userData'), 'sessions'))
+  // Privacy sweep: audio from crashed sessions must not outlive the restart.
+  sessions.sweep().catch(() => {})
+
+  const sessionStem = (startedAtIso: string): string =>
+    transcriptFileName(new Date(startedAtIso)).replace(/\.md$/, '')
+
+  ipcMain.handle('session:append', async (_evt, rawPayload: unknown) => {
+    const payload = validateSessionAudioPayload(rawPayload)
+    await sessions.append(sessionStem(payload.startedAt), payload.source, Buffer.from(payload.pcm))
+  })
+
+  ipcMain.handle('session:finalize', async (_evt, raw: unknown) => {
+    await sessions.finalize(sessionStem(validateStartedAt(raw)))
+  })
+
+  ipcMain.handle('session:discard', async (_evt, raw: unknown) => {
+    await sessions.discard(sessionStem(validateStartedAt(raw)))
+  })
+
+  ipcMain.handle('session:refine', async (_evt, raw: unknown) => {
+    const startedAt = validateStartedAt(raw)
+    const stem = sessionStem(startedAt)
+    const sendStatus = (s: RefineStatusEvent): void => {
+      mainWindow?.webContents.send('refine:status', s)
+    }
+    sendStatus({ state: 'running', startedAt })
+    void (async () => {
+      try {
+        const refined = await refineSession(
+          {
+            sessionDir: join(app.getPath('userData'), 'sessions', stem),
+            binPath: whisperBinaryPath(),
+            modelPath: modelPath(),
+            sampleRate: 16000
+          },
+          async (segments) => {
+            await writeMarkdownTranscript(startedAt, segments)
+          }
+        )
+        sendStatus({
+          state: 'done',
+          startedAt,
+          detail: refined ? `${refined.length} segments` : 'nothing to refine'
+        })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.warn('Transcript refinement failed:', msg)
+        sendStatus({ state: 'error', startedAt, detail: msg })
+      } finally {
+        // The audio's job is done either way — never keep it around.
+        await sessions.discard(stem)
+      }
+    })()
   })
 
   createWindow()

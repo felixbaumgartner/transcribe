@@ -54,6 +54,10 @@ class ChunkerProcessor extends AudioWorkletProcessor {
   // Per-block energy history for the current buffer: [end sample index, rms].
   // Used to pick the quietest cut point on a forced cut.
   private blockRms: Array<[number, number]> = []
+  // Raw session feed: the full untrimmed audio, batched into ~1s Int16 posts,
+  // streamed to disk by the main process for the post-meeting refinement pass.
+  private rawBuf = new Int16Array(sampleRate)
+  private rawIdx = 0
 
   constructor(options?: AudioWorkletNodeOptions) {
     super()
@@ -75,9 +79,17 @@ class ChunkerProcessor extends AudioWorkletProcessor {
     this.port.onmessage = (e) => {
       if (e.data?.command === 'flush') {
         this.cut(false, true)
+        this.flushRaw()
         this.port.postMessage({ type: 'flushed', source: this.source })
       }
     }
+  }
+
+  private flushRaw(): void {
+    if (this.rawIdx === 0) return
+    const out = this.rawBuf.slice(0, this.rawIdx)
+    this.port.postMessage({ type: 'raw', pcm: out.buffer, source: this.source }, [out.buffer])
+    this.rawIdx = 0
   }
 
   process(inputs: Float32Array[][]): boolean {
@@ -90,7 +102,7 @@ class ChunkerProcessor extends AudioWorkletProcessor {
       this.cut(true, false)
     }
 
-    // Mix to mono and measure block energy in one pass.
+    // Mix to mono, measure block energy, and feed the raw session stream in one pass.
     let sumSq = 0
     for (let i = 0; i < frames; i++) {
       let sum = 0
@@ -98,6 +110,9 @@ class ChunkerProcessor extends AudioWorkletProcessor {
       const v = sum / channels
       this.buffer[this.writeIdx + i] = v
       sumSq += v * v
+      const clamped = Math.max(-1, Math.min(1, v))
+      this.rawBuf[this.rawIdx++] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff
+      if (this.rawIdx >= this.rawBuf.length) this.flushRaw()
     }
     this.writeIdx += frames
 

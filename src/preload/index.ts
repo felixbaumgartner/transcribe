@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
   ModelDownloadProgress,
+  RefineStatusEvent,
   Segment,
   Speaker,
   TranscriptListItem,
@@ -11,6 +12,7 @@ import type {
 export type {
   ModelDownloadProgress,
   QueuedChunks,
+  RefineStatusEvent,
   Segment,
   Speaker,
   TranscriptListItem,
@@ -57,6 +59,25 @@ const api = {
     ipcRenderer.on('model:download-progress', listener)
     return () => {
       ipcRenderer.removeListener('model:download-progress', listener)
+    }
+  },
+  appendSessionAudio(startedAt: string, source: Speaker, pcm: ArrayBuffer): Promise<void> {
+    return ipcRenderer.invoke('session:append', { startedAt, source, pcm })
+  },
+  finalizeSession(startedAt: string): Promise<void> {
+    return ipcRenderer.invoke('session:finalize', startedAt)
+  },
+  discardSession(startedAt: string): Promise<void> {
+    return ipcRenderer.invoke('session:discard', startedAt)
+  },
+  refineTranscript(startedAt: string): Promise<void> {
+    return ipcRenderer.invoke('session:refine', startedAt)
+  },
+  onRefineStatus(cb: (s: RefineStatusEvent) => void): () => void {
+    const listener = (_evt: IpcRendererEvent, s: RefineStatusEvent): void => cb(s)
+    ipcRenderer.on('refine:status', listener)
+    return () => {
+      ipcRenderer.removeListener('refine:status', listener)
     }
   }
 }

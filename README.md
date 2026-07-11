@@ -36,6 +36,8 @@ If the model is missing (e.g. fresh install of the packaged app), the app shows 
 
 While recording, the transcript-so-far is autosaved every few seconds to a `.md.partial` file next to the transcripts. If the app crashes mid-meeting, the partial is recovered as `<name>-recovered.md` on next launch.
 
+After you stop, a background pass re-transcribes the whole recording with full context and a more careful decode, then silently rewrites the saved file — the live view is tuned for speed, the saved transcript for accuracy. Session audio is spooled to disk only for this pass and deleted the moment it finishes (or on next launch after a crash).
+
 ## Tech
 
 - **Electron 33** + React 18 + Vite + Tailwind v4

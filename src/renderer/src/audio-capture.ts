@@ -43,7 +43,21 @@ interface SourceWorklet {
   resolveFlushed: () => void
 }
 
-export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<CaptureHandle> {
+export interface RawAudioMessage {
+  source: Speaker
+  pcm: ArrayBuffer
+  startedAtIso: string
+}
+
+export async function startCapture(
+  onChunk: (c: ChunkMessage) => void,
+  onRaw?: (r: RawAudioMessage) => void
+): Promise<CaptureHandle> {
+  // Fixed up front so raw session-audio messages (which begin flowing before this
+  // function returns) already carry the session identity used by the final save.
+  const startedAt = new Date()
+  const startedAtIso = startedAt.toISOString()
+
   // Request system audio. We pass video:true because some browsers require it,
   // but the main process display-media handler returns 'loopback' audio without video.
   const displayStream = await navigator.mediaDevices.getDisplayMedia({
@@ -97,6 +111,10 @@ export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<
         resolveFlushed()
         return
       }
+      if (msg?.type === 'raw') {
+        onRaw?.({ source: msg.source ?? source, pcm: msg.pcm, startedAtIso })
+        return
+      }
       if (msg?.type) return
       onChunk({
         id: msg.id,
@@ -128,7 +146,6 @@ export async function startCapture(onChunk: (c: ChunkMessage) => void): Promise<
   // AudioContext can start suspended on Windows when created after an awaited gesture.
   if (ctx.state === 'suspended') await ctx.resume()
 
-  const startedAt = new Date()
   const micAvailable = micStream !== null
 
   return {

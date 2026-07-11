@@ -35,6 +35,20 @@ export function App(): JSX.Element {
     refreshHistory()
   }, [refreshHistory])
 
+  // Post-stop refinement status chip: running → done (auto-hides) / error.
+  const [refineState, setRefineState] = useState<'running' | 'done' | 'error' | null>(null)
+  useEffect(
+    () =>
+      window.api.onRefineStatus((s) => {
+        setRefineState(s.state)
+        if (s.state === 'done') {
+          refreshHistory()
+          setTimeout(() => setRefineState((cur) => (cur === 'done' ? null : cur)), 6000)
+        }
+      }),
+    [refreshHistory]
+  )
+
   // In-app model download (packaged users have no npm to run fetch scripts).
   const [downloadPct, setDownloadPct] = useState<number | null>(null)
   useEffect(() => window.api.onModelDownloadProgress((p) => setDownloadPct(p.pct)), [])
@@ -121,7 +135,13 @@ export function App(): JSX.Element {
     window.api.warmupWhisper().catch(() => {})
 
     try {
-      const handle = await startCapture((chunk) => handleChunk(chunk, sessionId))
+      const handle = await startCapture(
+        (chunk) => handleChunk(chunk, sessionId),
+        // Raw session audio spools to disk for the post-stop refinement pass.
+        (raw) => {
+          window.api.appendSessionAudio(raw.startedAtIso, raw.source, raw.pcm).catch(() => {})
+        }
+      )
       if (sessionId !== sessionIdRef.current) {
         await handle.stop()
         return
@@ -166,15 +186,23 @@ export function App(): JSX.Element {
       setError(`Stopped recording, but ${stillPending} chunk(s) are still transcribing. Try a smaller model if this keeps happening.`)
     }
 
+    const startedAtIso = handle.startedAt.toISOString()
+    await window.api.finalizeSession(startedAtIso).catch(() => {})
+
     const final = segmentsRef.current
     if (final.length === 0) {
+      window.api.discardSession(startedAtIso).catch(() => {})
       setError('Recording stopped, but no transcribed segments were produced. Nothing to save.')
       return
     }
     try {
-      await window.api.saveTranscript(handle.startedAt.toISOString(), final)
+      await window.api.saveTranscript(startedAtIso, final)
       await refreshHistory()
+      // Background pass re-transcribes the full audio with more context and a
+      // more careful decode, then rewrites the file we just saved.
+      window.api.refineTranscript(startedAtIso).catch(() => {})
     } catch (err) {
+      window.api.discardSession(startedAtIso).catch(() => {})
       const msg = err instanceof Error ? err.message : String(err)
       setError(`Failed to save transcript: ${msg}`)
     }
@@ -257,6 +285,27 @@ export function App(): JSX.Element {
       {recording && !micAvailable && (
         <div className="border-b border-amber-900/40 bg-amber-950/30 px-5 py-2 text-xs text-amber-200">
           Microphone unavailable — everything will be labeled “Others”.
+        </div>
+      )}
+
+      {refineState && (
+        <div
+          className={`flex items-center gap-2 border-b px-5 py-2 text-xs ${
+            refineState === 'running'
+              ? 'border-zinc-800/70 bg-zinc-900/50 text-zinc-400'
+              : refineState === 'done'
+                ? 'border-emerald-900/40 bg-emerald-950/30 text-emerald-300'
+                : 'border-amber-900/40 bg-amber-950/30 text-amber-200'
+          }`}
+        >
+          {refineState === 'running' && (
+            <span className="h-2 w-2 animate-pulse rounded-full bg-zinc-500" />
+          )}
+          {refineState === 'running'
+            ? 'Polishing transcript in the background — the saved file will update when done.'
+            : refineState === 'done'
+              ? 'Transcript polished ✓ — the saved file now uses the full-context pass.'
+              : 'Background polish failed — the fast live transcript was kept.'}
         </div>
       )}
 

@@ -93,6 +93,42 @@ export function validateSaveTranscriptPayload(value: unknown): SaveTranscriptPay
   }
 }
 
+export interface SessionAudioPayload {
+  startedAt: string
+  source: Speaker
+  pcm: ArrayBuffer
+}
+
+export interface RefineStatusEvent {
+  state: 'running' | 'done' | 'error'
+  startedAt: string
+  detail?: string
+}
+
+// Raw session appends arrive in ~1s batches (32 KB at 16 kHz); anything much
+// larger is malformed.
+const MAX_SESSION_APPEND_BYTES = 1024 * 1024
+
+export function validateSessionAudioPayload(value: unknown): SessionAudioPayload {
+  if (!isRecord(value)) throw new Error('Invalid session audio payload')
+  const { startedAt, source, pcm } = value
+  if (typeof startedAt !== 'string' || Number.isNaN(new Date(startedAt).getTime())) {
+    throw new Error('Invalid session start time')
+  }
+  if (!isSpeaker(source)) throw new Error('Invalid source')
+  if (!(pcm instanceof ArrayBuffer) || pcm.byteLength > MAX_SESSION_APPEND_BYTES) {
+    throw new Error('Invalid session audio payload')
+  }
+  return { startedAt, source, pcm }
+}
+
+export function validateStartedAt(value: unknown): string {
+  if (typeof value !== 'string' || Number.isNaN(new Date(value).getTime())) {
+    throw new Error('Invalid session start time')
+  }
+  return value
+}
+
 export function validateTranscribeChunkPayload(value: unknown): TranscribeChunkPayload {
   if (!isRecord(value)) throw new Error('Invalid chunk payload')
   const { id, pcm, sampleRate, source, prompt } = value

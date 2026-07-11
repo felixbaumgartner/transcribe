@@ -41,7 +41,7 @@ function whisperBinDir(): string {
     : join(__dirname, '..', '..', 'resources', 'whisper-bin')
 }
 
-function whisperBinaryPath(): string {
+export function whisperBinaryPath(): string {
   if (process.platform === 'win32') return join(whisperBinDir(), 'whisper.exe')
   return join(whisperBinDir(), 'whisper')
 }

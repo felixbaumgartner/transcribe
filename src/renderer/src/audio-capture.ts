@@ -6,7 +6,7 @@
 // 4. Each source feeds its OWN AudioWorklet (tagged 'others' for system, 'you' for mic),
 //    so each stream is chunked and transcribed independently — that's what powers
 //    speaker labels downstream without needing a diarization model.
-// 5. Each worklet emits Int16 PCM chunks (6s with 1s overlap by default), tagged with
+// 5. Each worklet emits Int16 PCM chunks (4s with 1s overlap by default), tagged with
 //    its source, which the main process routes into per-source whisper.cpp queues.
 //
 // Why 16 kHz: whisper.cpp consumes 16 kHz mono PCM. Constructing the AudioContext
@@ -15,7 +15,11 @@
 import workletUrl from './audio-worklet.ts?worker&url'
 import type { Speaker } from '../../preload/index'
 
-const CHUNK_SECONDS = 6
+// 4s chunks: with the resident server + capped audio context a chunk transcribes
+// in well under real time, so smaller chunks are pure latency win. Don't go much
+// lower — whisper hallucinates more on very short clips, and the 1s overlap
+// becomes a bigger fraction of redundant compute.
+const CHUNK_SECONDS = 4
 const OVERLAP_SECONDS = 1
 
 export interface CaptureHandle {

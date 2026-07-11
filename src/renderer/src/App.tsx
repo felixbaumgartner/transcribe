@@ -31,7 +31,7 @@ export function App(): JSX.Element {
   const chunkOffsetRef = useRef<Record<string, number>>({})
   // Effective new audio per chunk = chunkSeconds - overlapSeconds. Source of truth lives
   // in audio-capture.ts; we mirror it here once at start.
-  const chunkStrideRef = useRef(5)
+  const chunkStrideRef = useRef(3)
 
   const refreshHistory = useCallback(async () => {
     setHistory(await window.api.listTranscripts())

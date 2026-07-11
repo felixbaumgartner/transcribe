@@ -25,7 +25,7 @@ Click the green record button. On first launch:
 - **macOS 13+**: grant Screen Recording + Microphone permission in System Settings → Privacy. May need to relaunch after granting.
 - **macOS < 13**: not supported without a virtual audio driver (BlackHole). Upgrade if possible.
 
-While recording, transcripts appear every few seconds (6-second chunks with 1-second overlap). When you stop, the full transcript is written to:
+While recording, transcripts appear every few seconds (4-second chunks with 1-second overlap). When you stop, the full transcript is written to:
 
 - **Windows**: `%APPDATA%/transcribe/transcripts/`
 - **macOS**: `~/Library/Application Support/transcribe/transcripts/`
@@ -43,7 +43,7 @@ While recording, the transcript-so-far is autosaved every few seconds to a `.md.
 - **whisper-server** keeps the model loaded in RAM between chunks (spawned once, HTTP on localhost); falls back to spawning the CLI per chunk if the server binary is missing
 - Silence gating in the audio worklet (RMS < −60 dBFS chunks are skipped) plus a hallucination filter for whisper's stock silence artifacts ("[BLANK_AUDIO]", "Thanks for watching!", …)
 - System audio captured via Electron's `setDisplayMediaRequestHandler({ audio: 'loopback' })` — uses ScreenCaptureKit on macOS 13+ and WASAPI loopback on Windows. No virtual audio driver needed.
-- 6-second audio chunks with 1-second overlap for near-live transcription
+- 4-second audio chunks with 1-second overlap for near-live transcription
 
 ## Models
 

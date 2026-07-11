@@ -53,7 +53,8 @@ export class WhisperServerManager {
   constructor(
     private readonly binPath: string,
     private readonly modelPath: string,
-    private readonly threads: number
+    private readonly threads: number,
+    private readonly audioCtx: number
   ) {}
 
   /** False once the server has repeatedly failed to start — callers should use the CLI. */
@@ -116,7 +117,13 @@ export class WhisperServerManager {
     const port = await freePort()
     const proc = spawn(
       this.binPath,
-      ['-m', this.modelPath, '--host', '127.0.0.1', '--port', String(port), '-t', String(this.threads)],
+      [
+        '-m', this.modelPath,
+        '--host', '127.0.0.1',
+        '--port', String(port),
+        '-t', String(this.threads),
+        '-ac', String(this.audioCtx)
+      ],
       { stdio: ['ignore', 'ignore', 'pipe'] }
     )
 

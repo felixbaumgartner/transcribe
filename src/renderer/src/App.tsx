@@ -9,6 +9,7 @@ import type { Segment, TranscriptListItem, WorkerStatus, QueuedChunks } from '..
 type View = 'live' | 'history'
 
 const EMPTY_PENDING: QueuedChunks = { you: 0, others: 0 }
+const AUTOSAVE_DEBOUNCE_MS = 2500
 
 export function App(): JSX.Element {
   const [recording, setRecording] = useState(false)
@@ -23,6 +24,7 @@ export function App(): JSX.Element {
   const captureRef = useRef<CaptureHandle | null>(null)
   const pendingChunksRef = useRef<QueuedChunks>({ ...EMPTY_PENDING })
   const sessionIdRef = useRef(0)
+  const autosaveTimerRef = useRef<number | null>(null)
 
   // Stable elapsed-seconds offset per chunk so segment timestamps line up across chunks.
   // Keyed by `${source}-${id}` because each source has its own chunk counter.
@@ -39,6 +41,23 @@ export function App(): JSX.Element {
     window.api.workerStatus().then(setStatus).catch(() => setStatus(null))
     refreshHistory()
   }, [refreshHistory])
+
+  // In-app model download (packaged users have no npm to run fetch scripts).
+  const [downloadPct, setDownloadPct] = useState<number | null>(null)
+  useEffect(() => window.api.onModelDownloadProgress((p) => setDownloadPct(p.pct)), [])
+  const handleDownloadModel = useCallback(async () => {
+    setError(null)
+    setDownloadPct(0)
+    try {
+      await window.api.downloadModel()
+      setStatus(await window.api.workerStatus())
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setError(`Model download failed: ${msg}`)
+    } finally {
+      setDownloadPct(null)
+    }
+  }, [])
 
   const handleChunk = useCallback(async (chunk: ChunkMessage, sessionId: number) => {
     if (sessionId !== sessionIdRef.current) return
@@ -96,7 +115,7 @@ export function App(): JSX.Element {
       return
     }
     if (!s.model) {
-      setError(`Model not found.\n\nRun: npm run fetch-model\n\nExpected at: ${s.modelPath}`)
+      setError(`Model not found. Use the "Download model" button to fetch it.\n\nExpected at: ${s.modelPath}`)
       return
     }
 
@@ -120,6 +139,12 @@ export function App(): JSX.Element {
     const sessionId = sessionIdRef.current
     const handle = captureRef.current
     if (!handle) return
+    // Cancel any pending autosave so it can't recreate the .partial file after
+    // the final save deletes it.
+    if (autosaveTimerRef.current !== null) {
+      clearTimeout(autosaveTimerRef.current)
+      autosaveTimerRef.current = null
+    }
     await handle.stop()
     if (sessionId !== sessionIdRef.current) return
     captureRef.current = null
@@ -160,6 +185,22 @@ export function App(): JSX.Element {
   useEffect(() => {
     segmentsRef.current = segments
   }, [segments])
+
+  // Crash-safety autosave: while recording, persist the transcript-so-far to a
+  // .partial file at most once per AUTOSAVE_DEBOUNCE_MS. If the app dies
+  // mid-meeting, the main process recovers the partial on next launch.
+  useEffect(() => {
+    if (!recording || segments.length === 0) return
+    const handle = captureRef.current
+    if (!handle) return
+    if (autosaveTimerRef.current !== null) return
+    autosaveTimerRef.current = window.setTimeout(() => {
+      autosaveTimerRef.current = null
+      window.api
+        .autosaveTranscript(handle.startedAt.toISOString(), segmentsRef.current)
+        .catch(() => {}) // Autosave is best-effort; the final save reports real errors.
+    }, AUTOSAVE_DEBOUNCE_MS)
+  }, [segments, recording])
 
   return (
     <div className="flex h-screen flex-col">
@@ -204,6 +245,8 @@ export function App(): JSX.Element {
             onStart={handleStart}
             onStop={handleStop}
             status={status}
+            downloadPct={downloadPct}
+            onDownloadModel={handleDownloadModel}
           />
           <LiveTranscript segments={segments} />
         </div>

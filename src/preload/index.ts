@@ -1,5 +1,6 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type {
+  ModelDownloadProgress,
   Segment,
   Speaker,
   TranscriptListItem,
@@ -8,6 +9,7 @@ import type {
 } from '../shared/transcript'
 
 export type {
+  ModelDownloadProgress,
   QueuedChunks,
   Segment,
   Speaker,
@@ -28,6 +30,9 @@ const api = {
   saveTranscript(startedAt: string, segments: Segment[]): Promise<string> {
     return ipcRenderer.invoke('storage:save', { startedAt, segments })
   },
+  autosaveTranscript(startedAt: string, segments: Segment[]): Promise<string> {
+    return ipcRenderer.invoke('storage:autosave', { startedAt, segments })
+  },
   listTranscripts(): Promise<TranscriptListItem[]> {
     return ipcRenderer.invoke('storage:list')
   },
@@ -39,6 +44,16 @@ const api = {
   },
   workerStatus(): Promise<WorkerStatus> {
     return ipcRenderer.invoke('worker:status')
+  },
+  downloadModel(): Promise<string> {
+    return ipcRenderer.invoke('model:download')
+  },
+  onModelDownloadProgress(cb: (p: ModelDownloadProgress) => void): () => void {
+    const listener = (_evt: IpcRendererEvent, p: ModelDownloadProgress): void => cb(p)
+    ipcRenderer.on('model:download-progress', listener)
+    return () => {
+      ipcRenderer.removeListener('model:download-progress', listener)
+    }
   }
 }
 

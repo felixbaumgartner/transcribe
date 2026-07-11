@@ -25,7 +25,15 @@ export interface WorkerStatus {
   binaryPath: string
   modelPath: string
   modelName: string
+  serverBinary: boolean
+  serverRunning: boolean
   queuedChunks: QueuedChunks
+}
+
+export interface ModelDownloadProgress {
+  received: number
+  total: number
+  pct: number
 }
 
 export interface TranscribeChunkResult {

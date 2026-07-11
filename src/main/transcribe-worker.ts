@@ -5,6 +5,8 @@ import { cpus } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Segment, Speaker, TranscribeChunkResult } from '../shared/transcript.js'
+import { WhisperServerManager } from './whisper-server.js'
+import { modelName, modelPath } from './model.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -17,25 +19,26 @@ interface WhisperJsonOutput {
 const MAX_QUEUED_CHUNKS_PER_SOURCE = 8
 const DEFAULT_WHISPER_TIMEOUT_MS = 120000
 
-function whisperBinaryPath(): string {
+function whisperBinDir(): string {
   // In dev: resources/ sits next to the project root.
   // In packaged app: process.resourcesPath/whisper-bin/...
-  const isPackaged = app.isPackaged
-  const base = isPackaged
+  return app.isPackaged
     ? join(process.resourcesPath, 'whisper-bin')
     : join(__dirname, '..', '..', 'resources', 'whisper-bin')
-
-  if (process.platform === 'win32') return join(base, 'whisper.exe')
-  return join(base, 'whisper')
 }
 
-function modelName(): string {
-  return process.env.WHISPER_MODEL || 'small.en'
+function whisperBinaryPath(): string {
+  if (process.platform === 'win32') return join(whisperBinDir(), 'whisper.exe')
+  return join(whisperBinDir(), 'whisper')
 }
 
-function modelPath(): string {
-  // Stored in userData so it survives upgrades and is downloaded on first run.
-  return join(app.getPath('userData'), 'models', `ggml-${modelName()}.bin`)
+function whisperServerPath(): string {
+  if (process.platform === 'win32') return join(whisperBinDir(), 'whisper-server.exe')
+  return join(whisperBinDir(), 'whisper-server')
+}
+
+function whisperThreads(): number {
+  return Math.max(2, cpus().length - 2)
 }
 
 function whisperTimeoutMs(): number {
@@ -89,6 +92,13 @@ export class TranscribeWorker {
   // in parallel would double CPU and cancel the latency win we got from smaller chunks.
   private inflight: Promise<unknown> = Promise.resolve()
   private queuedChunks: Record<Speaker, number> = { you: 0, others: 0 }
+  // Lazily created on the first chunk (needs the model path to be final by then).
+  // null = server binary not installed; the CLI path is used instead.
+  private server: WhisperServerManager | null | undefined
+
+  dispose(): void {
+    this.server?.dispose()
+  }
 
   async status(): Promise<{
     binary: boolean
@@ -96,6 +106,8 @@ export class TranscribeWorker {
     binaryPath: string
     modelPath: string
     modelName: string
+    serverBinary: boolean
+    serverRunning: boolean
     queuedChunks: Record<Speaker, number>
   }> {
     return {
@@ -104,6 +116,8 @@ export class TranscribeWorker {
       binaryPath: whisperBinaryPath(),
       modelPath: modelPath(),
       modelName: modelName(),
+      serverBinary: await fileExists(whisperServerPath()),
+      serverRunning: this.server?.running ?? false,
       queuedChunks: { ...this.queuedChunks }
     }
   }
@@ -163,6 +177,14 @@ export class TranscribeWorker {
     }
   }
 
+  private async getServer(model: string): Promise<WhisperServerManager | null> {
+    if (this.server !== undefined) return this.server
+    this.server = (await fileExists(whisperServerPath()))
+      ? new WhisperServerManager(whisperServerPath(), model, whisperThreads())
+      : null
+    return this.server
+  }
+
   private async runOnce(
     id: number,
     pcm: Buffer,
@@ -179,11 +201,30 @@ export class TranscribeWorker {
       return []
     }
 
-    if (!(await fileExists(bin))) {
-      throw new Error(`whisper binary missing at ${bin} — run "npm run fetch-whisper"`)
-    }
     if (!(await fileExists(model))) {
       throw new Error(`model missing at ${model} — run "npm run fetch-model"`)
+    }
+
+    // Preferred path: resident whisper-server (model stays loaded across chunks).
+    const server = await this.getServer(model)
+    if (server?.available) {
+      try {
+        const segments = await server.transcribe(pcmToWav(pcm, sampleRate), whisperTimeoutMs())
+        return segments
+          // Whisper marks segments it is confident contain no speech; those are
+          // near-certain hallucinations (breathing, keyboard noise, music).
+          .filter((s) => (s.no_speech_prob ?? 0) < 0.85)
+          .map((s) => ({ t0: s.start, t1: s.end, text: s.text, speaker: source }))
+      } catch (err) {
+        // Server hiccup (crash, timeout, port clash) — fall back to the CLI for
+        // this chunk. The next chunk retries the server; after repeated start
+        // failures `available` latches false and we stop trying.
+        console.warn(`whisper-server failed for chunk ${source}-${id}; using CLI fallback:`, err)
+      }
+    }
+
+    if (!(await fileExists(bin))) {
+      throw new Error(`whisper binary missing at ${bin} — run "npm run fetch-whisper"`)
     }
 
     const tmpDir = join(app.getPath('userData'), 'tmp')
@@ -202,7 +243,7 @@ export class TranscribeWorker {
           '-oj', // output JSON
           '-of', wavPath, // output file prefix (whisper appends .json)
           '-l', 'en',
-          '-t', String(Math.max(2, cpus().length - 2)),
+          '-t', String(whisperThreads()),
           '--no-prints'
         ]
         const proc = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })

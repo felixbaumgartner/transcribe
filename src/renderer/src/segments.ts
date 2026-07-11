@@ -17,12 +17,13 @@ import type { Segment } from '../../preload/index'
  *    first; reverse-order echoes slip through.
  */
 export function mergeSegments(prev: Segment[], next: Segment[]): Segment[] {
-  if (prev.length === 0) return next.filter((s) => normalizeText(s.text))
+  if (prev.length === 0) return next.filter((s) => normalizeText(s.text) && !isHallucination(s.text))
   if (next.length === 0) return prev
   const tail = prev.slice(-8)
   const filtered = next.filter((candidate) => {
     const candidateText = normalizeText(candidate.text)
     if (!candidateText) return false
+    if (isHallucination(candidate.text)) return false
     return !tail.some((existing) => {
       if (normalizeText(existing.text) !== candidateText) return false
 
@@ -47,6 +48,33 @@ export function mergeSegments(prev: Segment[], next: Segment[]): Segment[] {
 
 function normalizeText(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+// Whisper hallucinates stock phrases on silence/noise — YouTube-outro lines it
+// learned from training data, and bracketed sound annotations. Only segments
+// consisting ENTIRELY of such content are dropped; the phrases inside real
+// sentences are untouched.
+const HALLUCINATED_PHRASES = new Set([
+  'thanks for watching',
+  'thank you for watching',
+  'please subscribe',
+  "don't forget to subscribe",
+  'see you in the next video',
+  'see you next time',
+  'you'
+])
+
+/** True for segments that are whisper noise artifacts, not speech. */
+export function isHallucination(text: string): boolean {
+  const t = normalizeText(text)
+  if (!t) return true
+  // Pure sound annotations: "[BLANK_AUDIO]", "(silence)", "(music)", "*click*", "♪ ... ♪"
+  if (/^[\[(*♪].*[\])*♪]$/.test(t)) return true
+  // Stock phrases (matched with trailing punctuation stripped).
+  if (HALLUCINATED_PHRASES.has(t.replace(/[.!?]+$/, ''))) return true
+  // "Subtitles by the Amara.org community" and similar credits.
+  if (/^subtitles?\s+by\b/.test(t) || /amara\.org/.test(t)) return true
+  return false
 }
 
 function intervalsOverlap(a: Segment, b: Segment): boolean {

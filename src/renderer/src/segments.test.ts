@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { mergeSegments } from './segments.ts'
+import { isHallucination, mergeSegments } from './segments.ts'
 
 test('mergeSegments removes overlapping duplicate text', () => {
   const merged = mergeSegments(
@@ -93,4 +93,32 @@ test('mergeSegments same-source overlap dedup respects speaker (no cross-source 
   )
 
   assert.equal(merged.length, 2)
+})
+
+test('isHallucination flags sound annotations and stock phrases', () => {
+  assert.equal(isHallucination('[BLANK_AUDIO]'), true)
+  assert.equal(isHallucination(' (silence) '), true)
+  assert.equal(isHallucination('(electronic beeping)'), true)
+  assert.equal(isHallucination('*click*'), true)
+  assert.equal(isHallucination('Thanks for watching!'), true)
+  assert.equal(isHallucination('Subtitles by the Amara.org community'), true)
+  assert.equal(isHallucination('you'), true)
+})
+
+test('isHallucination keeps real speech', () => {
+  assert.equal(isHallucination('Thanks for watching the metrics dashboard today.'), false)
+  assert.equal(isHallucination('Can you hear me?'), false)
+  assert.equal(isHallucination('Let me share my screen (one second).'), false)
+})
+
+test('mergeSegments drops hallucinated segments', () => {
+  const merged = mergeSegments(
+    [{ t0: 0, t1: 2, text: 'real speech' }],
+    [
+      { t0: 5, t1: 7, text: '[BLANK_AUDIO]' },
+      { t0: 8, t1: 10, text: 'more real speech' }
+    ]
+  )
+
+  assert.deepEqual(merged.map((s) => s.text), ['real speech', 'more real speech'])
 })

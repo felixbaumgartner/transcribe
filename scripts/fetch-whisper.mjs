@@ -74,6 +74,22 @@ async function fetchWindows() {
       copyFileSync(join(srcDir, f), join(targetDir, f))
     }
   }
+
+  // The resident HTTP server — the app prefers it (model loads once instead of
+  // per chunk) and falls back to whisper.exe when it's absent.
+  const serverCandidates = ['whisper-server.exe', 'server.exe']
+  let server = ''
+  for (const cand of serverCandidates) {
+    const hit = flat.find((f) => f.toLowerCase().endsWith(`\\${cand}`))
+    if (hit) { server = hit; break }
+  }
+  if (server) {
+    copyFileSync(server, join(targetDir, 'whisper-server.exe'))
+    console.log('✓ Installed whisper-server.exe (resident transcription server)')
+  } else {
+    console.warn('⚠ whisper-server.exe not found in zip — the app will fall back to whisper.exe per chunk (slower)')
+  }
+
   rmSync(tmp, { recursive: true, force: true })
   console.log(`✓ Installed whisper.exe + DLLs into ${targetDir}`)
 }
@@ -109,6 +125,18 @@ async function fetchMac() {
   copyFileSync(binPath, join(targetDir, 'whisper'))
   chmodSync(join(targetDir, 'whisper'), 0o755)
   console.log(`✓ Installed whisper into ${targetDir}/whisper (from ${binPath})`)
+
+  // Homebrew's whisper-cpp formula also ships the HTTP server; install it too so
+  // the app can keep the model resident instead of reloading it per chunk.
+  const serverWhich = spawnSync('which', ['whisper-server'])
+  if (serverWhich.status === 0) {
+    const serverPath = serverWhich.stdout.toString().trim()
+    copyFileSync(serverPath, join(targetDir, 'whisper-server'))
+    chmodSync(join(targetDir, 'whisper-server'), 0o755)
+    console.log(`✓ Installed whisper-server into ${targetDir}/whisper-server (from ${serverPath})`)
+  } else {
+    console.warn('⚠ whisper-server not found — the app will fall back to whisper-cli per chunk (slower)')
+  }
 }
 
 function walk(dir) {

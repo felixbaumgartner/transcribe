@@ -2,8 +2,16 @@ import { app, BrowserWindow, ipcMain, shell, session } from 'electron'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { writeMarkdownTranscript, listTranscripts, readTranscript, transcriptsDir } from './storage.js'
+import {
+  writeMarkdownTranscript,
+  autosaveTranscript,
+  recoverPartialTranscripts,
+  listTranscripts,
+  readTranscript,
+  transcriptsDir
+} from './storage.js'
 import { TranscribeWorker } from './transcribe-worker.js'
+import { downloadModel } from './model.js'
 import {
   validateSaveTranscriptPayload,
   validateTranscribeChunkPayload
@@ -82,6 +90,11 @@ app.whenReady().then(() => {
     callback({ video: sources[0], audio: 'loopback' })
   })
 
+  // Promote transcripts orphaned by a crash before the renderer lists history.
+  recoverPartialTranscripts().catch((err) => {
+    console.warn('Failed to recover partial transcripts:', err)
+  })
+
   worker = new TranscribeWorker()
 
   ipcMain.handle('transcribe:chunk', async (_evt, rawPayload: unknown) => {
@@ -95,6 +108,11 @@ app.whenReady().then(() => {
     return file
   })
 
+  ipcMain.handle('storage:autosave', async (_evt, rawPayload: unknown) => {
+    const payload = validateSaveTranscriptPayload(rawPayload)
+    return await autosaveTranscript(payload.startedAt, payload.segments)
+  })
+
   ipcMain.handle('storage:list', async () => listTranscripts())
   ipcMain.handle('storage:read', async (_evt, file: string) => readTranscript(file))
   ipcMain.handle('storage:open-folder', async () => {
@@ -102,6 +120,12 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('worker:status', async () => worker!.status())
+
+  ipcMain.handle('model:download', async () => {
+    return await downloadModel((p) => {
+      mainWindow?.webContents.send('model:download-progress', p)
+    })
+  })
 
   createWindow()
 
@@ -112,4 +136,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('will-quit', () => {
+  worker?.dispose()
 })

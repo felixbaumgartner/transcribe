@@ -32,10 +32,16 @@ While recording, transcripts appear every few seconds (6-second chunks with 1-se
 
 Use the History tab in-app to browse and view past transcripts.
 
+If the model is missing (e.g. fresh install of the packaged app), the app shows a **Download model** button and fetches it in-app with a progress bar — no npm needed.
+
+While recording, the transcript-so-far is autosaved every few seconds to a `.md.partial` file next to the transcripts. If the app crashes mid-meeting, the partial is recovered as `<name>-recovered.md` on next launch.
+
 ## Tech
 
 - **Electron 33** + React 18 + Vite + Tailwind v4
 - **whisper.cpp** for transcription, runs on CPU (no GPU required)
+- **whisper-server** keeps the model loaded in RAM between chunks (spawned once, HTTP on localhost); falls back to spawning the CLI per chunk if the server binary is missing
+- Silence gating in the audio worklet (RMS < −60 dBFS chunks are skipped) plus a hallucination filter for whisper's stock silence artifacts ("[BLANK_AUDIO]", "Thanks for watching!", …)
 - System audio captured via Electron's `setDisplayMediaRequestHandler({ audio: 'loopback' })` — uses ScreenCaptureKit on macOS 13+ and WASAPI loopback on Windows. No virtual audio driver needed.
 - 6-second audio chunks with 1-second overlap for near-live transcription
 

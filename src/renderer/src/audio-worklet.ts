@@ -69,6 +69,32 @@ class ChunkerProcessor extends AudioWorkletProcessor {
     }
 
     const float = this.buffer.subarray(0, this.writeIdx)
+
+    // Energy gate: don't transcribe silence. Whisper burns a full inference pass
+    // on it and tends to hallucinate text ("Thank you.", "[BLANK_AUDIO]", …).
+    // -60 dBFS RMS is far below any speech (even quiet speech is ~-40 dBFS) but
+    // above pure digital silence from an idle loopback. The chunk id still
+    // advances so downstream timestamp offsets (id * stride) stay aligned.
+    const SILENCE_RMS = 0.001
+    let sumSq = 0
+    for (let i = 0; i < float.length; i++) sumSq += float[i] * float[i]
+    const rms = Math.sqrt(sumSq / float.length)
+    if (rms < SILENCE_RMS) {
+      this.chunkId++
+      if (isFinal) {
+        this.writeIdx = 0
+        return
+      }
+      const silentTail = Math.min(this.overlapSamples, this.writeIdx)
+      if (silentTail > 0) {
+        this.buffer.copyWithin(0, this.writeIdx - silentTail, this.writeIdx)
+        this.writeIdx = silentTail
+      } else {
+        this.writeIdx = 0
+      }
+      return
+    }
+
     const pcm = new Int16Array(float.length)
     for (let i = 0; i < float.length; i++) {
       let s = Math.max(-1, Math.min(1, float[i]))
